@@ -1,0 +1,45 @@
+name: 准备构建环境
+description: 安装 Go、Node.js 与 wails3（带缓存），供发布流程的各平台任务复用。
+
+inputs:
+  wails-version:
+    description: wails3 版本号
+    required: false
+    default: v3.0.0-beta.34
+
+runs:
+  using: composite
+  steps:
+    - name: 安装 Go（版本取自 go.mod）
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache: true
+
+    - name: 安装 Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: 缓存 wails3
+      id: cache-wails
+      uses: actions/cache@v4
+      with:
+        path: .gobin
+        key: wails3-${{ inputs.wails-version }}-${{ runner.os }}
+
+    - name: 安装 wails3
+      if: steps.cache-wails.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GOBIN: ${{ github.workspace }}/.gobin
+      run: go install github.com/wailsapp/wails/v3/cmd/wails3@${{ inputs.wails-version }}
+
+    - name: 把 wails3 加进 PATH
+      shell: bash
+      run: |
+        mkdir -p "$GITHUB_WORKSPACE/.gobin"
+        echo "$GITHUB_WORKSPACE/.gobin" >> "$GITHUB_PATH"
+        "$GITHUB_WORKSPACE/.gobin/wails3" version

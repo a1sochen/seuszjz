@@ -11,10 +11,14 @@
 ARG GO_IMAGE=golang:alpine
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12
 ARG CGO_ENABLED=0
+# 发布时由 CI 传 --build-arg APP_VERSION=x.y.z, 注入到设置页显示的版本号;
+# 留空则用 service.go 里的默认值。
+ARG APP_VERSION=
 
 # ---- 构建阶段 ----
 FROM ${GO_IMAGE} AS builder
 ARG CGO_ENABLED
+ARG APP_VERSION
 
 WORKDIR /app
 
@@ -32,7 +36,8 @@ COPY . .
 # (上游 go.mod 声明的 module 路径与仓库地址不一致), 删掉会导致编译失败。
 RUN go mod download
 
-RUN CGO_ENABLED=${CGO_ENABLED} go build -tags server,production -trimpath -buildvcs=false -ldflags="-s -w" -o server .
+RUN CGO_ENABLED=${CGO_ENABLED} go build -tags server,production -trimpath -buildvcs=false \
+    -ldflags="-s -w ${APP_VERSION:+-X main.Version=${APP_VERSION}}" -o server .
 
 # ---- 运行阶段 ----
 FROM ${RUNTIME_IMAGE}

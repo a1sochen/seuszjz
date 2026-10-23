@@ -1,0 +1,298 @@
+name: 发布
+
+# 触发方式:
+#   1. 打 tag 推送（推荐）:  git tag v1.2.3 && git push origin v1.2.3
+#      版本号取自 tag，构建完成后自动创建对应 Release 并上传四个产物。
+#   2. Actions 页面手动运行，填版本号（同样会创建 Release），或者留空只构建产物不发布。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 1.2.3）。留空则只构建产物、不创建 Release；tag 推送时忽略此项。'
+        required: false
+        default: ''
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  WAILS_VERSION: v3.0.0-beta.34
+
+jobs:
+  # 解析版本号与 tag，供后续所有任务使用
+  prepare:
+    name: 解析版本
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      sha: ${{ steps.v.outputs.sha }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - name: 计算版本号
+        id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          input="${{ github.event.inputs.version }}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+            publish=true
+          elif [[ -n "$input" ]]; then
+            version="${input#v}"
+            publish=true
+          else
+            version="0.0.0-dev-${GITHUB_SHA::7}"
+            publish=false
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version"         >> "$GITHUB_OUTPUT"
+          echo "sha=$GITHUB_SHA"       >> "$GITHUB_OUTPUT"
+          echo "publish=$publish"      >> "$GITHUB_OUTPUT"
+          echo "本次版本: v$version (发布: $publish)"
+
+  # 发布前的门槛：前端能编译 + Go 能通过静态检查与单元测试
+  check:
+    name: 检查
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup
+        with:
+          wails-version: ${{ env.WAILS_VERSION }}
+
+      - name: 构建前端
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: 静态检查与单元测试
+        run: |
+          go vet ./...
+          go test ./...
+
+  # Windows：桌面版 + 服务版
+  windows:
+    name: Windows 桌面版与服务版
+    needs: [prepare, check]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup
+        with:
+          wails-version: ${{ env.WAILS_VERSION }}
+
+      - name: 写入版本号
+        shell: bash
+        run: python .github/scripts/set-version.py "${{ needs.prepare.outputs.version }}"
+
+      - name: 构建
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          wails3 task build
+          wails3 task build:server
+
+      - name: 收集产物
+        shell: bash
+        run: |
+          mkdir -p out
+          cp bin/seuszjz.exe out/seuszjz.exe
+          cp bin/seuszjz-server.exe out/seuszjz-server.exe
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*
+          if-no-files-found: error
+
+  # Linux：只有服务版（本项目不做 Linux 桌面版），amd64 与 arm64
+  linux:
+    name: Linux 服务版 (${{ matrix.arch }})
+    needs: [prepare, check]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup
+        with:
+          wails-version: ${{ env.WAILS_VERSION }}
+
+      - name: 写入版本号
+        run: python3 .github/scripts/set-version.py "${{ needs.prepare.outputs.version }}"
+
+      - name: 构建前端
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: 交叉编译
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: '0'
+          APP_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          name="seuszjz-server-linux-${{ matrix.arch }}"
+          go build -tags server,production -trimpath -buildvcs=false \
+            -ldflags="-s -w -X main.Version=${APP_VERSION}" -o "out/${name}" .
+          tar -czf "out/${name}.tar.gz" -C out "${name}"
+          rm "out/${name}"
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: out/*
+          if-no-files-found: error
+
+  # Docker 镜像：多架构推送到 GHCR
+  docker:
+    name: Docker 镜像
+    needs: [prepare, check]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup
+        with:
+          wails-version: ${{ env.WAILS_VERSION }}
+
+      # 镜像构建时要把前端产物拷进去（go:embed all:frontend/dist）
+      - name: 构建前端
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: 启用 QEMU（构建 arm64 镜像用）
+        uses: docker/setup-qemu-action@v3
+
+      - name: 启用 buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成镜像标签
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ needs.prepare.outputs.version }}
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ !startsWith(needs.prepare.outputs.version, '0.0.0-dev') }}
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/docker/Dockerfile.server
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            APP_VERSION=${{ needs.prepare.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # GitHub Release：汇总四个产物 + 校验和 + 发布说明
+  release:
+    name: 创建 Release
+    needs: [prepare, check, windows, linux]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 下载产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 整理产物并生成校验和
+        run: |
+          mkdir -p dist
+          find artifacts -type f \( -name '*.exe' -o -name '*.tar.gz' \) -exec cp {} dist/ \;
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          ls -l
+
+      - name: 生成发布说明
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          prev="$(git describe --tags --abbrev=0 'HEAD^' 2>/dev/null || true)"
+          if [[ -n "$prev" ]]; then range="$prev..HEAD"; else range="HEAD"; fi
+          {
+            echo "东南大学讲座助手 v${VERSION}"
+            echo
+            echo "## 下载"
+            echo
+            echo "| 文件 | 说明 |"
+            echo "| --- | --- |"
+            echo "| \`seuszjz.exe\` | Windows 桌面版，双击即可运行（无控制台窗口） |"
+            echo "| \`seuszjz-server.exe\` | Windows 服务版，命令行运行后浏览器访问 |"
+            echo "| \`seuszjz-server-linux-amd64.tar.gz\` | Linux 服务版（x86_64） |"
+            echo "| \`seuszjz-server-linux-arm64.tar.gz\` | Linux 服务版（ARM64） |"
+            echo "| \`SHA256SUMS.txt\` | 以上文件的 SHA-256 校验和 |"
+            echo
+            echo "## Docker"
+            echo
+            echo '```bash'
+            echo "docker run -d --name seuszjz -p 8080:8080 ghcr.io/only9464/seuszjz:${VERSION}"
+            echo '```'
+            echo
+            echo "## 变更"
+            echo
+            git log --no-merges --pretty=format:'- %s' "$range"
+            echo
+          } > NOTES.md
+          cat NOTES.md
+
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          args=(release create "$TAG" dist/* --title "东南大学讲座助手 v${VERSION}" --notes-file NOTES.md)
+          if [[ "$EVENT" != "push" ]]; then
+            args+=(--target "$SHA")
+          fi
+          if [[ "$VERSION" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh "${args[@]}"

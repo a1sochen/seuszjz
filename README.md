@@ -86,11 +86,51 @@ frontend/               Vue 3 界面（shadcn-vue + Tailwind v4，src/components
                         src/assets/seu-logo.svg 是官方校标矢量图，界面与程序图标都用它
 build/                  Wails 构建配置：windows 打包、docker 镜像、图标与元信息
 scripts/                逆向阶段的两个 Python 原始脚本（仅供对照，不参与构建）
+.github/                发布流程：打 tag 后自动构建四个产物并推送 Docker 镜像
 ```
 
 前端调用 Go 的 TypeScript 绑定由 `wails3 generate bindings` 生成到 `frontend/bindings/`，构建时自动刷新。
 
 界面左上角、登录页、窗口图标与 favicon 使用的都是东南大学官方校标。程序图标与 favicon 由 `frontend/src/assets/seu-logo.svg`（彩色校标，来自学校视觉识别系统的矢量素材）渲染导出：`build/appicon.png`（1024×1024）、`frontend/public/favicon.png`（128×128）、`build/windows/icon.ico`（`wails3 generate icons` 生成）。校标版权归东南大学所有，这里只作为本工具的标识使用，如与学校的视觉识别规范冲突，以学校规范为准。
+
+## 发布
+
+发布由 `.github/workflows/release.yml` 完成，两种触发方式：
+
+```bash
+# 推荐：打 tag 推送，版本号取自 tag
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+也可以在 Actions 页面手动运行「发布」：填写版本号会构建并创建 Release；版本号留空只构建产物、不发布（版本号记为 `0.0.0-dev-<短提交号>`）。
+
+流程依次做四件事：解析版本号 → 检查（前端编译 + `go vet` + `go test`）→ 四个平台并行构建 → 创建 Release。产物如下：
+
+| 产物 | 平台 | 说明 |
+| --- | --- | --- |
+| `seuszjz.exe` | Windows | 桌面版，双击运行，无控制台窗口 |
+| `seuszjz-server.exe` | Windows | 服务版，命令行运行后浏览器访问 |
+| `seuszjz-server-linux-amd64.tar.gz` | Linux | 服务版（x86_64） |
+| `seuszjz-server-linux-arm64.tar.gz` | Linux | 服务版（ARM64） |
+
+同时构建 `linux/amd64` 与 `linux/arm64` 两个架构的镜像推到 GHCR：
+
+```bash
+docker run -d -p 8080:8080 ghcr.io/only9464/seuszjz:latest
+```
+
+版本号会写进三个地方，保证「设置页显示的版本 = tag」：`.github/scripts/set-version.py` 改写 `build/config.yml`、`build/windows/info.json`（exe 属性，四段式）、`frontend/package.json`；Go 侧的 `main.Version` 由构建参数 `APP_VERSION` 通过 `-ldflags "-X main.Version=..."` 注入（Dockerfile 里是 `--build-arg APP_VERSION=...`）。本地想模拟发布构建：
+
+```bash
+APP_VERSION=1.2.3 wails3 task build        # 桌面版
+APP_VERSION=1.2.3 wails3 task build:server # 服务版
+```
+
+两条与仓库设置有关的提醒：
+
+- Actions 的默认工作流权限是只读，工作流里已经自带 `permissions: contents: write / packages: write`，不需要额外改仓库设置。
+- 第一次推送镜像后，GHCR 上的包默认是 **private**，需要在仓库右侧 Packages 里把它改成 public，否则别人拉取要先登录。
 
 ## 数据与隐私
 
