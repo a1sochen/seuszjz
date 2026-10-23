@@ -83,11 +83,14 @@ internal/store/         账号与会话的内存快照（序列化成 JSON 交�
 internal/ocr/           验证码识别适配层（内部用 ddddocr-go）
 internal/grab/          自动抢座引擎（状态机 + 轮询 + 验证码通道）
 frontend/               Vue 3 界面（shadcn-vue + Tailwind v4，src/components/ui 为组件库）
+                        src/assets/seu-logo.svg 是官方校标矢量图，界面与程序图标都用它
 build/                  Wails 构建配置：windows 打包、docker 镜像、图标与元信息
 scripts/                逆向阶段的两个 Python 原始脚本（仅供对照，不参与构建）
 ```
 
 前端调用 Go 的 TypeScript 绑定由 `wails3 generate bindings` 生成到 `frontend/bindings/`，构建时自动刷新。
+
+界面左上角、登录页、窗口图标与 favicon 使用的都是东南大学官方校标。程序图标与 favicon 由 `frontend/src/assets/seu-logo.svg`（彩色校标，来自学校视觉识别系统的矢量素材）渲染导出：`build/appicon.png`（1024×1024）、`frontend/public/favicon.png`（128×128）、`build/windows/icon.ico`（`wails3 generate icons` 生成）。校标版权归东南大学所有，这里只作为本工具的标识使用，如与学校的视觉识别规范冲突，以学校规范为准。
 
 ## 数据与隐私
 

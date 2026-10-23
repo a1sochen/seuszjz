@@ -17,7 +17,8 @@ import {
   SidebarMenuItem,
   SidebarSeparator,
 } from "@/components/ui/sidebar";
-import { Bell, Bookmark, CalendarDays, GraduationCap, LogOut, Settings, Zap } from "@lucide/vue";
+import { Bell, Bookmark, CalendarDays, LogOut, Settings, Zap } from "@lucide/vue";
+import BrandMark from "./BrandMark.vue";
 
 interface NavItem {
   key: ViewKey;
@@ -52,9 +53,7 @@ async function signOut(): Promise<void> {
   <Sidebar collapsible="none" class="border-r">
     <SidebarHeader class="gap-3 px-3 py-4">
       <div class="flex items-center gap-2.5">
-        <div class="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
-          <GraduationCap class="size-4" />
-        </div>
+        <BrandMark class="size-8 shrink-0" />
         <div class="min-w-0 leading-tight">
           <p class="truncate text-sm font-semibold tracking-tight">东南大学讲座助手</p>
           <p class="truncate text-[11px] text-muted-foreground">SEU Lecture</p>

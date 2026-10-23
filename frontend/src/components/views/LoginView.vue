@@ -7,7 +7,8 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { GraduationCap, Moon, Sun } from "@lucide/vue";
+import { Moon, Sun } from "@lucide/vue";
+import BrandMark from "../BrandMark.vue";
 
 const username = ref(state.settings?.username ?? "");
 const password = ref("");
@@ -42,9 +43,7 @@ function toggleTheme(): void {
 
     <div class="relative w-full max-w-sm">
       <div class="mb-6 flex flex-col items-center gap-3 text-center">
-        <div class="flex size-11 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-          <GraduationCap class="size-5" />
-        </div>
+        <BrandMark class="size-11" />
         <div class="space-y-1">
           <h1 class="text-lg font-semibold tracking-tight">东南大学讲座助手</h1>
           <p class="text-xs text-muted-foreground">登录统一身份认证，开始预约素质讲座</p>
