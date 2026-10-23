@@ -88,6 +88,10 @@ def update_package_lock(version: str) -> str:
 
 
 def main() -> int:
+    # Windows 的 CI 里 stdout 默认是 cp1252，直接打印中文会 UnicodeEncodeError
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     if len(sys.argv) != 2:
         print(__doc__)
         return 2
