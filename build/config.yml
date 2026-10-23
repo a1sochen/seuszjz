@@ -1,0 +1,43 @@
+# 应用元信息。版本号请同时改这里和 build/windows/info.json 的
+# fixed.file_version / fixed.product_version / info.0000.*Version（必须四段式, 如 1.0.0.0,
+# 否则 Windows 会忽略 exe 的版本信息）。修改后重新 `wails3 task build` 即可。
+version: '3'
+
+info:
+  companyName: "seuszjz"
+  productName: "东南大学讲座助手"
+  productIdentifier: "com.seuszjz.lecture"
+  description: "东南大学素质讲座预约助手"
+  copyright: "Copyright (c) 2026 seuszjz contributors, MIT License"
+  comments: "东南大学素质讲座预约助手"
+  version: "1.0.0"
+
+# 开发模式: 改动 Go 文件后自动重编并重启; 前端由 Vite 热更新, 不在此监听。
+dev_mode:
+  root_path: .
+  log_level: warn
+  debounce: 1000
+  ignore:
+    dir:
+      - .git
+      - node_modules
+      - frontend
+      - bin
+    file:
+      - .DS_Store
+      - .gitignore
+      - .gitkeep
+      - "*_test.go"
+    watched_extension:
+      - "*.go"
+      - "*.js"
+      - "*.ts"
+    git_ignore: true
+  executes:
+    - cmd: wails3 build DEV=true
+      type: blocking
+    - cmd: wails3 task common:dev:frontend
+      type: background
+    - cmd: wails3 task run
+      type: primary
+      exit_policy: shutdown

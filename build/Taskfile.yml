@@ -1,0 +1,163 @@
+version: '3'
+
+# 公共构建步骤: 前端依赖与构建、TS 绑定生成、图标、服务器版二进制与 Docker 镜像。
+# 由根目录 Taskfile.yml 以 `common:` 命名空间引入, 桌面打包步骤在 windows/Taskfile.yml。
+
+tasks:
+  go:mod:tidy:
+    summary: go mod tidy
+    internal: true
+    # 多架构构建会并发调用此任务; run: once 避免两个 go mod tidy 同时改 go.mod。
+    run: once
+    cmds:
+      - go mod tidy
+
+  install:frontend:deps:
+    summary: 安装前端依赖 (npm)
+    run: once
+    dir: frontend
+    sources:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules
+    preconditions:
+      - sh: npm version
+        msg: "未找到 npm, 请先安装 Node.js: https://nodejs.org/"
+    cmds:
+      - npm install
+
+  build:frontend:
+    summary: 构建前端 (DEV=true 时不压缩)
+    run: once
+    dir: frontend
+    sources:
+      - "**/*"
+      - exclude: node_modules/**/*
+    generates:
+      - dist/**/*
+    deps:
+      - task: install:frontend:deps
+      - task: generate:bindings
+        vars:
+          BUILD_FLAGS:
+            ref: .BUILD_FLAGS
+          OBFUSCATED:
+            ref: .OBFUSCATED
+    cmds:
+      - '{{if eq .DEV "true"}}npm run build:dev{{else}}npm run build{{end}}'
+    env:
+      PRODUCTION: '{{if eq .DEV "true"}}false{{else}}true{{end}}'
+
+  generate:bindings:
+    summary: 生成前端 TypeScript 绑定 (frontend/bindings)
+    run: once
+    deps:
+      - task: go:mod:tidy
+    sources:
+      - "**/*.[jt]s"
+      - exclude: frontend/**/*
+      - frontend/bindings/**/*
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - frontend/bindings/**/*
+    cmds:
+      - wails3 generate bindings -f '{{.BUILD_FLAGS}}' -clean=true{{if eq .OBFUSCATED "true"}} -obfuscated{{end}} -ts -i
+
+  generate:icons:
+    summary: 由 build/appicon.png 生成 Windows 图标
+    run: once
+    dir: build
+    sources:
+      - "appicon.png"
+    generates:
+      - "windows/icon.ico"
+      - "icon.icns"
+    cmds:
+      # 只做 Windows 图标; -macfilename 指到本地文件, 免得它去找已删除的 build/darwin 目录。
+      - wails3 generate icons -input appicon.png -windowsfilename windows/icon.ico -macfilename icon.icns
+
+  dev:frontend:
+    summary: 以开发模式启动 Vite
+    deps:
+      - task: install:frontend:deps
+    dir: frontend
+    cmds:
+      - npm run dev -- --port {{.VITE_PORT}} --strictPort
+
+  build:server:
+    summary: 构建服务器版二进制 (纯 HTTP, 无 GUI 依赖)
+    desc: |
+      默认产出生产包: -tags server,production, -trimpath, 去掉符号表。
+      用法: task build:server [DEV=true] [OBFUSCATED=true] [EXTRA_TAGS=tag1,tag2]
+        DEV=true        开发包 (-tags server, 不裁剪, 保留内联)
+        OBFUSCATED=true 用 garble 混淆 (需自行安装 garble)
+        EXTRA_TAGS      追加的构建标签
+    deps:
+      - task: build:frontend
+        vars:
+          DEV:
+            ref: .DEV
+          BUILD_FLAGS:
+            ref: .BUILD_FLAGS
+          OBFUSCATED:
+            ref: .OBFUSCATED
+    preconditions:
+      - sh: '{{if eq .OBFUSCATED "true"}}command -v garble >/dev/null 2>&1{{else}}true{{end}}'
+        msg: "混淆构建需要 garble: go install mvdan.cc/garble@v0.16.0"
+    cmds:
+      - '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.APP_NAME}}-server{{exeExt}}"'
+    vars:
+      BUILD_FLAGS: '-tags server{{if eq .DEV "true"}}{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -buildvcs=false -gcflags=all="-l"{{else}},production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s"{{end}}'
+
+  run:server:
+    summary: 构建并运行开发版服务器 (DEV=true)
+    deps:
+      - task: build:server
+        vars:
+          DEV: "true"
+    cmds:
+      - '"./{{.BIN_DIR}}/{{.APP_NAME}}-server{{exeExt}}"'
+
+  build:docker:
+    summary: 构建服务器版 Docker 镜像
+    desc: |
+      先在本地构建生产前端 (嵌入二进制), 再用 build/docker/Dockerfile.server 打包。
+      用法: task build:docker [TAG=seuszjz:latest] [CGO_ENABLED=1] [GO_IMAGE=...] [RUNTIME_IMAGE=...]
+    deps:
+      - task: build:frontend
+        vars:
+          BUILD_FLAGS: "-tags server,production"
+    preconditions:
+      - sh: docker info > /dev/null 2>&1
+        msg: "需要 Docker, 请先安装"
+      - sh: test -f build/docker/Dockerfile.server
+        msg: "缺少 build/docker/Dockerfile.server"
+    cmds:
+      - >-
+        docker build
+        --build-arg CGO_ENABLED={{.CGO_ENABLED | default "0"}}
+        --build-arg GO_IMAGE={{.GO_IMAGE | default "golang:alpine"}}
+        --build-arg RUNTIME_IMAGE={{.RUNTIME_IMAGE | default "gcr.io/distroless/static-debian12"}}
+        -t {{.TAG | default (printf "%s:latest" .APP_NAME)}}
+        -f build/docker/Dockerfile.server .
+    vars:
+      TAG: "{{.TAG}}"
+
+  run:docker:
+    summary: 构建并运行 Docker 镜像 (宿主机 8080)
+    desc: |
+      用法: task run:docker [TAG=seuszjz:latest] [PORT=8080]
+      容器内端口固定 8080, PORT 只改宿主机映射。
+    deps:
+      - task: build:docker
+        vars:
+          TAG:
+            ref: .TAG
+    cmds:
+      - docker run --rm -p {{.PORT | default "8080"}}:8080 {{.TAG | default (printf "%s:latest" .APP_NAME)}}
+    vars:
+      TAG: "{{.TAG}}"
+      PORT: "{{.PORT}}"

@@ -1,0 +1,15 @@
+# Docker 构建上下文裁剪: 容器里只需要 Go 源码与已构建好的 frontend/dist。
+.git
+.gitignore
+.task
+bin
+node_modules
+frontend/node_modules
+frontend/bindings
+*.exe
+*.syso
+*.log
+README.md
+LICENSE
+scripts
+build
