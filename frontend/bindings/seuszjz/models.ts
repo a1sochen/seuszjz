@@ -39,6 +39,11 @@ export interface LoginResult {
      * manual / cache / password
      */
     "source": string;
+
+    /**
+     * campus / offcampus, 本次走的网络路径
+     */
+    "network": string;
 }
 
 /**
@@ -71,6 +76,11 @@ export interface Settings {
     "interval": number;
     "cooldown": number;
     "theme": string;
+
+    /**
+     * NetMode 是网络环境偏好: auto / campus / offcampus。
+     */
+    "netMode": string;
     "hasPassword": boolean;
 }
 

@@ -54,6 +54,20 @@ wails3 task run:docker     # 构建并运行，浏览器打开 http://127.0.0.1:
 
 > `main.go` 用 `go:embed` 内嵌 `frontend/dist`，所以直接 `go build` 前要先有前端产物：`cd frontend && npm ci && npm run build`（`wails3 task build` 会自动按顺序做）。
 
+## 网络环境（校园网 / 校外）
+
+校外访问 ehall 必须先过 `vpn.seu.edu.cn` 的 aTrust 网关；校园网本来就在内网，那个网关通常用不上，所以登录路径是可选的（设置页「账号 → 网络环境」）：
+
+| 模式 | 行为 |
+| --- | --- |
+| 自动识别（默认） | 先匿名请求一次 `https://ehall.seu.edu.cn/`：校外会被网关 302 到 `vpn.seu.edu.cn/controller/v1/public/verify`，据此判断要不要过网关 |
+| 校园网 | 只走直连：CAS → ehall，完全不碰 `vpn.seu.edu.cn` |
+| 校外 | 先过 aTrust 网关，再访问 ehall（初版行为） |
+
+两条路互为兜底，但只有「网络不可达」（DNS 失败、拨号超时、连接被拒）才换路；密码错误、票据为空这类业务失败直接报错，不做无谓重试。直连尝试另有 15 秒预算，判错了也不会让人干等。
+
+两点副作用：校园网直连时拿不到网关的 `onlineInfo`，用户名会退化成学号；切换网络环境后旧会话可能失效，但**网络不通不会清掉本地登录信息**（日志里是 `网络不可用, 保留本地会话`），恢复网络后可以继续用。实际走的路径会体现在登录进度和日志里（`网络探测结果: campus` / `offcampus`）。
+
 ## 服务器模式
 
 服务器版用 `-tags server` 编译：Wails 把窗口实现换成空壳（`Center` / `Flash` / `Focus` 等都是空操作），改为只跑 HTTP 服务，因此 `main.go` 里没有任何「服务器模式」分支，同一份代码两种构建即可。前端页面、`/wails/runtime` 绑定调用、WebSocket 事件在普通浏览器里都能用，所以镜像里不需要 GTK / WebKitGTK。

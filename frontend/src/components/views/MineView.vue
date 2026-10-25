@@ -1,15 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import {
-  cancel,
-  check,
-  clockOf,
-  formatDateTime,
-  isBusy,
-  lectureStatusText,
-  state,
-} from "../../store";
-import { Badge } from "@/components/ui/badge";
+import { cancel, check, clockOf, formatDateTime, isBusy, state } from "../../store";
+import StatusBadge from "../StatusBadge.vue";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -18,16 +10,7 @@ import { Bookmark, CircleCheck, X } from "@lucide/vue";
 
 const records = computed(() => state.mine);
 
-function badgeVariant(status: string): "default" | "secondary" | "outline" {
-  switch (status) {
-    case "booked":
-    case "joined":
-    case "checked_in":
-      return "secondary";
-    default:
-      return "outline";
-  }
-}
+
 
 function canCancel(status: string): boolean {
   return status !== "checked_in" && status !== "cancelled";
@@ -69,7 +52,7 @@ function canCancel(status: string): boolean {
         >
           <div class="min-w-0 flex-1 space-y-1.5">
             <div class="flex flex-wrap items-center gap-2">
-              <Badge :variant="badgeVariant(record.status)">{{ lectureStatusText(record.status) }}</Badge>
+              <StatusBadge :status="record.status" />
               <span class="text-[11px] text-muted-foreground">{{ record.series || "素质讲座" }}</span>
             </div>
             <h2 class="truncate text-sm font-medium">{{ record.name }}</h2>

@@ -1,8 +1,10 @@
 /* ===========================================================================
    东南大学讲座助手 · shadcn-vue 主题（黑白 / 中性灰）
    ---------------------------------------------------------------------------
-   所有颜色只用 oklch 的无彩色（chroma = 0）：深色为近黑、浅色为纯白，
-   除 destructive（错误态）保留一点低饱和红以外，整套 UI 都是黑白灰。
+   主体颜色只用 oklch 的无彩色（chroma = 0）：深色为近黑、浅色为纯白。
+   例外是 destructive（错误态）和下面这组"状态色"：讲座的六种状态需要一个能
+   一眼扫开的区分度，所以给徽章按语义上弱色——底/字/边同色系、低饱和，
+   亮色主题与暗色主题各一套，不破坏整体黑白基调。
    =========================================================================== */
 
 @import "tailwindcss";
@@ -34,6 +36,26 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+
+  /* 状态徽章: bg-status-open / text-status-open-fg / border-status-open-border */
+  --color-status-open: var(--status-open);
+  --color-status-open-fg: var(--status-open-fg);
+  --color-status-open-border: var(--status-open-border);
+  --color-status-full: var(--status-full);
+  --color-status-full-fg: var(--status-full-fg);
+  --color-status-full-border: var(--status-full-border);
+  --color-status-locked: var(--status-locked);
+  --color-status-locked-fg: var(--status-locked-fg);
+  --color-status-locked-border: var(--status-locked-border);
+  --color-status-joined: var(--status-joined);
+  --color-status-joined-fg: var(--status-joined-fg);
+  --color-status-joined-border: var(--status-joined-border);
+  --color-status-muted: var(--status-muted);
+  --color-status-muted-fg: var(--status-muted-fg);
+  --color-status-muted-border: var(--status-muted-border);
+  --color-status-bad: var(--status-bad);
+  --color-status-bad-fg: var(--status-bad-fg);
+  --color-status-bad-border: var(--status-bad-border);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -74,6 +96,27 @@
   --accent-foreground: oklch(0.185 0 0);
   --destructive: oklch(0.505 0.115 25.5);
   --border: oklch(0.905 0 0);
+
+  /* 状态色（浅色主题）: 绿=可预约 / 琥珀=已满 / 蓝=未开放
+     青绿=已预约 / 灰=已结束或已取消 / 红=已违约。红色只留给违约与取消。 */
+  --status-open: oklch(0.95 0.05 152);
+  --status-open-fg: oklch(0.45 0.13 152);
+  --status-open-border: oklch(0.85 0.07 152);
+  --status-full: oklch(0.95 0.06 85);
+  --status-full-fg: oklch(0.5 0.13 65);
+  --status-full-border: oklch(0.87 0.08 80);
+  --status-locked: oklch(0.95 0.04 250);
+  --status-locked-fg: oklch(0.46 0.14 255);
+  --status-locked-border: oklch(0.86 0.06 250);
+  --status-joined: oklch(0.94 0.045 195);
+  --status-joined-fg: oklch(0.44 0.1 200);
+  --status-joined-border: oklch(0.84 0.06 195);
+  --status-muted: oklch(0.965 0 0);
+  --status-muted-fg: oklch(0.5 0 0);
+  --status-muted-border: oklch(0.9 0 0);
+  --status-bad: oklch(0.965 0.035 25);
+  --status-bad-fg: oklch(0.5 0.12 25.5);
+  --status-bad-border: oklch(0.9 0.055 25);
   --input: oklch(0.905 0 0);
   --ring: oklch(0.6 0 0);
   --chart-1: oklch(0.87 0 0);
@@ -111,6 +154,26 @@
   --accent-foreground: oklch(0.97 0 0);
   --destructive: oklch(0.685 0.135 25.5);
   --border: oklch(1 0 0 / 12%);
+
+  /* 状态色（暗色主题）: 同色相压暗底色、提亮文字, 保证在近黑卡片上有对比。 */
+  --status-open: oklch(0.27 0.055 152);
+  --status-open-fg: oklch(0.88 0.15 152);
+  --status-open-border: oklch(0.38 0.07 152);
+  --status-full: oklch(0.28 0.06 70);
+  --status-full-fg: oklch(0.88 0.13 78);
+  --status-full-border: oklch(0.39 0.07 70);
+  --status-locked: oklch(0.28 0.05 255);
+  --status-locked-fg: oklch(0.88 0.1 250);
+  --status-locked-border: oklch(0.39 0.06 255);
+  --status-joined: oklch(0.29 0.045 195);
+  --status-joined-fg: oklch(0.87 0.09 195);
+  --status-joined-border: oklch(0.4 0.05 195);
+  --status-muted: oklch(0.24 0 0);
+  --status-muted-fg: oklch(0.72 0 0);
+  --status-muted-border: oklch(0.32 0 0);
+  --status-bad: oklch(0.28 0.05 25);
+  --status-bad-fg: oklch(0.85 0.12 25);
+  --status-bad-border: oklch(0.4 0.06 25);
   --input: oklch(1 0 0 / 16%);
   --ring: oklch(0.62 0 0);
   --chart-1: oklch(0.9 0 0);

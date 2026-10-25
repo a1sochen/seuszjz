@@ -21,7 +21,7 @@ func sampleSnapshot(t *testing.T) string {
 	t.Helper()
 	src := store.New()
 	err := src.Save(store.Config{
-		Username:    "220265496",
+		Username:    "220000001",
 		Password:    "s3cret",
 		Remember:    true,
 		AutoLogin:   true,
@@ -34,9 +34,9 @@ func sampleSnapshot(t *testing.T) string {
 		t.Fatalf("保存配置: %v", err)
 	}
 	err = src.SaveSession(store.Session{
-		Username: "220265496",
+		Username: "220000001",
 		Cookies:  []seu.SavedCookie{{Host: "ehall.seu.edu.cn", Path: "/", Name: "JSESSIONID", Value: "abc"}},
-		User:     seu.UserInfo{Username: "220265496", DisplayName: "张三"},
+		User:     seu.UserInfo{Username: "220000001", DisplayName: "张三"},
 	})
 	if err != nil {
 		t.Fatalf("保存会话: %v", err)
@@ -80,7 +80,7 @@ func TestBootstrapRestoresSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	if !boot.Status.HasSession || boot.Status.SavedUsername != "220265496" {
+	if !boot.Status.HasSession || boot.Status.SavedUsername != "220000001" {
 		t.Fatalf("会话没恢复: %+v", boot.Status)
 	}
 	if boot.Status.User.DisplayName != "张三" {
@@ -94,7 +94,7 @@ func TestBootstrapRestoresSnapshot(t *testing.T) {
 	c.stateMu.RLock()
 	pass, username := c.pass, c.cfg.Username
 	c.stateMu.RUnlock()
-	if username != "220265496" || pass != "s3cret" {
+	if username != "220000001" || pass != "s3cret" {
 		t.Fatalf("密码/学号没恢复: username=%q pass=%q", username, pass)
 	}
 
@@ -133,7 +133,7 @@ func TestBootstrapImportsLegacyFiles(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("SEUSZJZ_DATA_DIR", dir)
 
-	cfg, err := json.Marshal(store.Config{Username: "220265496", Remember: true, Interval: 9})
+	cfg, err := json.Marshal(store.Config{Username: "220000001", Remember: true, Interval: 9})
 	if err != nil {
 		t.Fatalf("序列化配置: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestBootstrapImportsLegacyFiles(t *testing.T) {
 		t.Fatalf("写配置: %v", err)
 	}
 	sess, err := json.Marshal(store.Session{
-		Username: "220265496",
+		Username: "220000001",
 		Cookies:  []seu.SavedCookie{{Host: "ehall.seu.edu.cn", Path: "/", Name: "JSESSIONID", Value: "abc"}},
 	})
 	if err != nil {
@@ -156,7 +156,7 @@ func TestBootstrapImportsLegacyFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	if boot.Status.SavedUsername != "220265496" || !boot.Status.HasSession || boot.Settings.Interval != 9 {
+	if boot.Status.SavedUsername != "220000001" || !boot.Status.HasSession || boot.Settings.Interval != 9 {
 		t.Fatalf("旧版配置没导进来: %+v %+v", boot.Status, boot.Settings)
 	}
 	var st store.State

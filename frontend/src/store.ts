@@ -1,4 +1,4 @@
-import { reactive } from "vue";
+import { reactive, ref } from "vue";
 import { toast as showToast } from "vue-sonner";
 import { Events } from "@wailsio/runtime";
 import * as SessionService from "../bindings/seuszjz/sessionservice.js";
@@ -97,6 +97,31 @@ export function lectureStatusText(status: string): string {
   }
 }
 
+// StatusTone 是状态徽章的配色分类, 具体颜色在 style.css 的 --status-* token 里。
+// open 可预约 / full 已满 / locked 未开放 / joined 已预约 / muted 已结束 / bad 已违约
+export type StatusTone = "open" | "full" | "locked" | "joined" | "muted" | "bad";
+
+// statusTone 按语义把后端状态映射成配色: 能约的是绿的, 已满琥珀, 未开放蓝的,
+// 约上的青绿, 结束了灰的, 违约才用红——红色只留给真正需要追责的状态。
+export function statusTone(status: string): StatusTone {
+  switch (status) {
+    case "available":
+      return "open";
+    case "full":
+      return "full";
+    case "not_open":
+      return "locked";
+    case "booked":
+    case "joined":
+    case "checked_in":
+      return "joined";
+    case "defaulted":
+      return "bad";
+    default:
+      return "muted";
+  }
+}
+
 export function formatDateTime(value: string): string {
   if (!value) return "—";
   return value.replace(":00", "").replace(/-/g, "/").slice(0, 16);
@@ -105,6 +130,93 @@ export function formatDateTime(value: string): string {
 export function clockOf(value: string): string {
   const m = value.match(/(\d{2}:\d{2})/);
   return m ? m[1] : "";
+}
+
+// --- 时间与预约窗口 ---------------------------------------------------------
+//
+// 卡片上原本只显示讲座进行时间, 预约窗口 (YYKSSJ/YYJSSJ) 只在详情里, 很容易错过。
+// 这里统一算成一句带倒计时的话, 由界面按紧急程度着色。
+
+// clockOffsetMs 是本机与服务器的时间差: 每次拉到列表时用服务器时间校正,
+// 这样倒计时不会因为本机时钟不准而错位。
+export const clockOffsetMs = ref(0);
+
+// nowTick 每 15 秒推进一次, 让倒计时自己走, 不必等到下次刷新列表。
+export const nowTick = ref(Date.now());
+setInterval(() => {
+  nowTick.value = Date.now();
+}, 15_000);
+
+function parseServerTime(value: string): number {
+  if (!value) return Number.NaN;
+  return Date.parse(value.replace(/-/g, "/"));
+}
+
+// serverNow 返回「服务器时间」的当前毫秒数。
+export function serverNow(): number {
+  return nowTick.value + clockOffsetMs.value;
+}
+
+// durationText 把毫秒差转成粗粒度文案: 「2 天 3 小时」「48 分钟」。
+export function durationText(ms: number): string {
+  if (ms <= 0) return "0 分钟";
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return "不到 1 分钟";
+  const days = Math.floor(minutes / 1_440);
+  const hours = Math.floor((minutes % 1_440) / 60);
+  const mins = minutes % 60;
+  if (days > 0) return hours > 0 ? `${days} 天 ${hours} 小时` : `${days} 天`;
+  if (hours > 0) return mins > 0 ? `${hours} 小时 ${mins} 分` : `${hours} 小时`;
+  return `${mins} 分钟`;
+}
+
+// WindowTone 决定这句话的强调程度。
+// idle 未开放 / open 预约中 / hot 即将截止 / closed 已截止 / unknown 无数据
+export type WindowTone = "idle" | "open" | "hot" | "closed" | "unknown";
+
+export interface BookingWindow {
+  tone: WindowTone;
+  text: string;
+}
+
+// bookingWindow 把一场讲座的预约时段翻译成一句话 + 紧急程度。
+export function bookingWindow(lecture: Lecture): BookingWindow {
+  const start = parseServerTime(lecture.bookStartAt);
+  const end = parseServerTime(lecture.bookEndAt);
+  if (Number.isNaN(start) && Number.isNaN(end)) {
+    return { tone: "unknown", text: "预约时间待定" };
+  }
+  const now = serverNow();
+  if (!Number.isNaN(start) && now < start) {
+    return {
+      tone: "idle",
+      text: `预约 ${formatDateTime(lecture.bookStartAt)} 开放 · 还有 ${durationText(start - now)}`,
+    };
+  }
+  if (!Number.isNaN(end) && now >= end) {
+    return { tone: "closed", text: `预约已于 ${formatDateTime(lecture.bookEndAt)} 截止` };
+  }
+  const left = Number.isNaN(end) ? "" : ` · 剩 ${durationText(end - now)}`;
+  // 两小时内截止视为紧急, 卡片上用警示色提醒。
+  const hot = !Number.isNaN(end) && end - now <= 2 * 3_600_000;
+  const until = Number.isNaN(end) ? "预约中" : `预约中 · ${formatDateTime(lecture.bookEndAt)} 截止`;
+  return { tone: hot ? "hot" : "open", text: `${until}${left}` };
+}
+
+// nextOpening 返回最近一个尚未开放的预约时间, 用于列表顶部提示。
+export function nextOpening(lectures: Lecture[]): string | null {
+  const now = serverNow();
+  let best = Number.NaN;
+  let text = "";
+  for (const lecture of lectures) {
+    const start = parseServerTime(lecture.bookStartAt);
+    if (Number.isNaN(start) || start <= now) continue;
+    if (Number.isNaN(best) || start < best) {
+      best = start;
+      text = `${formatDateTime(lecture.bookStartAt)}（还有 ${durationText(start - now)}）`;
+    }
+  }
+  return Number.isNaN(best) ? null : text;
 }
 
 // --- 启动 -------------------------------------------------------------------
@@ -285,6 +397,9 @@ export async function refresh(): Promise<void> {
     state.notices = data.notices ?? [];
     state.serverTime = data.serverTime;
     state.fetchedAt = data.fetchedAt;
+    // 用服务器时间校正本机时钟, 倒计时才准。
+    const serverMs = parseServerTime(data.serverTime);
+    if (!Number.isNaN(serverMs)) clockOffsetMs.value = serverMs - Date.now();
   } catch (e) {
     const text = errorText(e);
     toast("err", text);

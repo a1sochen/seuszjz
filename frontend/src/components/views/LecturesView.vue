@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import {
+  bookingWindow,
   clockOf,
   formatDateTime,
-  lectureStatusText,
+  nextOpening,
   state,
+  type BookingWindow,
   type FilterKey,
+  type WindowTone,
 } from "../../store";
 import type { Lecture } from "../../../bindings/seuszjz/internal/seu/models.js";
-import { Badge } from "@/components/ui/badge";
+import StatusBadge from "../StatusBadge.vue";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -29,7 +32,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { CalendarDays, Search } from "@lucide/vue";
+import { CalendarDays, Clock, Search } from "@lucide/vue";
 
 const filters: { key: FilterKey; label: string }[] = [
   { key: "all", label: "全部状态" },
@@ -63,6 +66,26 @@ const filtered = computed(() => {
 
 const joinedCount = computed(() => state.lectures.filter((lecture) => lecture.joined).length);
 
+// 最近一场还没开放预约的讲座, 提示在工具栏右侧, 免得错过开约时间。
+const opening = computed(() => nextOpening(state.lectures));
+
+function windowOf(lecture: Lecture): BookingWindow {
+  return bookingWindow(lecture);
+}
+
+// toneClass 用单色主题里的三档对比度表达紧急程度, 不引入彩色。
+function toneClass(tone: WindowTone): string {
+  switch (tone) {
+    case "hot":
+      return "font-medium text-destructive";
+    case "idle":
+    case "open":
+      return "font-medium text-foreground";
+    default:
+      return "text-muted-foreground";
+  }
+}
+
 const detailOpen = ref(false);
 const detail = ref<Lecture | null>(null);
 
@@ -75,18 +98,7 @@ function canGrab(lecture: Lecture): boolean {
   return lecture.status === "available" || lecture.status === "not_open";
 }
 
-function badgeVariant(status: string): "default" | "secondary" | "outline" {
-  switch (status) {
-    case "available":
-      return "default";
-    case "joined":
-    case "booked":
-    case "checked_in":
-      return "secondary";
-    default:
-      return "outline";
-  }
-}
+
 
 function grab(lecture: Lecture): void {
   detailOpen.value = false;
@@ -120,6 +132,7 @@ function grab(lecture: Lecture): void {
 
       <p class="ml-auto text-[11px] text-muted-foreground tabular-nums">
         共 {{ state.lectures.length }} 讲 · 已约 {{ joinedCount }}
+        <template v-if="opening"> · 最近开放 {{ opening }}</template>
         <template v-if="state.fetchedAt"> · {{ clockOf(state.fetchedAt) }} 更新</template>
       </p>
     </div>
@@ -152,7 +165,7 @@ function grab(lecture: Lecture): void {
         >
           <div class="min-w-0 flex-1 space-y-1.5">
             <div class="flex flex-wrap items-center gap-2">
-              <Badge :variant="badgeVariant(lecture.status)">{{ lectureStatusText(lecture.status) }}</Badge>
+              <StatusBadge :status="lecture.status" />
               <span class="text-[11px] text-muted-foreground">{{ lecture.series || "素质讲座" }}</span>
               <span v-if="lecture.category" class="text-[11px] text-muted-foreground">/ {{ lecture.category }}</span>
             </div>
@@ -162,7 +175,11 @@ function grab(lecture: Lecture): void {
               <span>·</span>
               <span>{{ lecture.venue || "地点待定" }}</span>
               <span>·</span>
-              <span class="tabular-nums">{{ formatDateTime(lecture.startAt) }}</span>
+              <span class="tabular-nums">讲座 {{ formatDateTime(lecture.startAt) }}</span>
+            </p>
+            <p class="flex items-center gap-1.5 text-[11px] tabular-nums">
+              <Clock class="size-3 shrink-0" :class="toneClass(windowOf(lecture).tone)" />
+              <span :class="toneClass(windowOf(lecture).tone)">{{ windowOf(lecture).text }}</span>
             </p>
           </div>
 
@@ -183,13 +200,16 @@ function grab(lecture: Lecture): void {
         <DialogHeader>
           <DialogTitle class="pr-8 text-base leading-snug">{{ detail?.name }}</DialogTitle>
           <DialogDescription class="flex flex-wrap items-center gap-2 text-xs">
-            <Badge v-if="detail" :variant="badgeVariant(detail.status)">
-              {{ lectureStatusText(detail.status) }}
-            </Badge>
+            <StatusBadge v-if="detail" :status="detail.status" />
             <span>{{ detail?.series }}</span>
             <span v-if="detail?.category">/ {{ detail.category }}</span>
           </DialogDescription>
         </DialogHeader>
+
+        <p v-if="detail" class="flex items-center gap-1.5 text-xs tabular-nums">
+          <Clock class="size-3.5 shrink-0" :class="toneClass(windowOf(detail).tone)" />
+          <span :class="toneClass(windowOf(detail).tone)">{{ windowOf(detail).text }}</span>
+        </p>
 
         <dl v-if="detail" class="grid grid-cols-1 gap-3 text-xs sm:grid-cols-2">
           <div class="space-y-0.5">
@@ -209,6 +229,10 @@ function grab(lecture: Lecture): void {
           <div class="space-y-0.5">
             <dt class="text-muted-foreground">预约开放</dt>
             <dd class="font-medium tabular-nums">{{ formatDateTime(detail.bookStartAt) || "—" }}</dd>
+          </div>
+          <div class="space-y-0.5">
+            <dt class="text-muted-foreground">预约截止</dt>
+            <dd class="font-medium tabular-nums">{{ formatDateTime(detail.bookEndAt) || "—" }}</dd>
           </div>
           <div class="space-y-0.5">
             <dt class="text-muted-foreground">名额</dt>

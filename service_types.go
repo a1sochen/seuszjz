@@ -14,6 +14,8 @@ type Settings struct {
 	Interval    int    `json:"interval"`
 	Cooldown    int    `json:"cooldown"`
 	Theme       string `json:"theme"`
+	// NetMode 是网络环境偏好: auto / campus / offcampus。
+	NetMode     string `json:"netMode"`
 	HasPassword bool   `json:"hasPassword"`
 }
 
@@ -48,8 +50,9 @@ type Overview struct {
 
 // LoginResult 是登录结果。
 type LoginResult struct {
-	User   seu.UserInfo `json:"user"`
-	Source string       `json:"source"` // manual / cache / password
+	User    seu.UserInfo `json:"user"`
+	Source  string       `json:"source"`  // manual / cache / password
+	Network string       `json:"network"` // campus / offcampus, 本次走的网络路径
 }
 
 // Captcha 是一张验证码图片 (data URL)。
