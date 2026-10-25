@@ -36,6 +36,7 @@ type Config struct {
 	Interval    int    `json:"interval"` // 抢座轮询间隔 (秒)
 	Cooldown    int    `json:"cooldown"` // 被限流后的冷却 (秒)
 	Theme       string `json:"theme"`    // dark / light
+	NetMode     string `json:"netMode"`  // auto / campus / offcampus
 }
 
 // Default 返回默认配置。

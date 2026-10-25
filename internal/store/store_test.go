@@ -13,7 +13,7 @@ import (
 func TestSnapshotRoundTrip(t *testing.T) {
 	src := New()
 	if err := src.Save(Config{
-		Username:    "220265496",
+		Username:    "220000001",
 		Password:    "s3cret",
 		Remember:    true,
 		AutoLogin:   true,
@@ -25,9 +25,9 @@ func TestSnapshotRoundTrip(t *testing.T) {
 		t.Fatalf("保存配置: %v", err)
 	}
 	if err := src.SaveSession(Session{
-		Username: "220265496",
+		Username: "220000001",
 		Cookies:  []seu.SavedCookie{{Name: "JSESSIONID", Value: "abc", Host: "ehall.seu.edu.cn", Path: "/"}},
-		User:     seu.UserInfo{Username: "220265496", DisplayName: "张三"},
+		User:     seu.UserInfo{Username: "220000001", DisplayName: "张三"},
 	}); err != nil {
 		t.Fatalf("保存会话: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	}
 
 	cfg := dst.Load()
-	if cfg.Username != "220265496" || cfg.Interval != 5 || cfg.Cooldown != 120 || cfg.Theme != "light" {
+	if cfg.Username != "220000001" || cfg.Interval != 5 || cfg.Cooldown != 120 || cfg.Theme != "light" {
 		t.Fatalf("配置恢复不正确: %+v", cfg)
 	}
 	if got := dst.Password(cfg); got != "s3cret" {
@@ -100,11 +100,11 @@ func TestRestoreEmptyKeepsDefaults(t *testing.T) {
 
 func TestRestorePartialSnapshotUsesDefaults(t *testing.T) {
 	s := New()
-	if err := s.Restore([]byte(`{"version":1,"config":{"username":"220265496","remember":true}}`)); err != nil {
+	if err := s.Restore([]byte(`{"version":1,"config":{"username":"220000001","remember":true}}`)); err != nil {
 		t.Fatalf("恢复快照: %v", err)
 	}
 	cfg := s.Load()
-	if cfg.Username != "220265496" || !cfg.Remember {
+	if cfg.Username != "220000001" || !cfg.Remember {
 		t.Fatalf("字段没恢复: %+v", cfg)
 	}
 	// 快照里没写的字段应该落到默认值, 而不是零值。
@@ -169,7 +169,7 @@ func TestImportLegacyFiles(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("SEUSZJZ_DATA_DIR", dir)
 
-	cfg, err := json.Marshal(Config{Username: "220265496", Remember: true, Interval: 7})
+	cfg, err := json.Marshal(Config{Username: "220000001", Remember: true, Interval: 7})
 	if err != nil {
 		t.Fatalf("序列化配置: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestImportLegacyFiles(t *testing.T) {
 		t.Fatalf("写配置: %v", err)
 	}
 	sess, err := json.Marshal(Session{
-		Username: "220265496",
+		Username: "220000001",
 		Cookies:  []seu.SavedCookie{{Name: "JSESSIONID", Value: "abc"}},
 	})
 	if err != nil {
@@ -192,7 +192,7 @@ func TestImportLegacyFiles(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("导入旧文件失败: ok=%v err=%v", ok, err)
 	}
-	if got := s.Load(); got.Username != "220265496" || got.Interval != 7 {
+	if got := s.Load(); got.Username != "220000001" || got.Interval != 7 {
 		t.Fatalf("配置没导进来: %+v", got)
 	}
 	if got, ok := s.LoadSession(); !ok || len(got.Cookies) != 1 {

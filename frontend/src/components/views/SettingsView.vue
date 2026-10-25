@@ -30,6 +30,11 @@ const autoLogin = computed({
   set: (value: boolean) => void saveSettings({ autoLogin: value }),
 });
 
+const netMode = computed({
+  get: () => settings.value?.netMode || "auto",
+  set: (value: string) => void saveSettings({ netMode: value }),
+});
+
 const autoCaptcha = computed({
   get: () => !!settings.value?.autoCaptcha,
   set: (value: boolean) => void saveSettings({ autoCaptcha: value }),
@@ -87,6 +92,25 @@ function saveCooldown(): void {
                 <p class="text-[11px] text-muted-foreground">复用已保存的会话，失效时自动重登</p>
               </div>
               <Switch v-model="autoLogin" />
+            </div>
+
+            <div class="flex items-center justify-between gap-4 rounded-md border px-3 py-2.5">
+              <div class="space-y-0.5">
+                <p class="text-xs font-medium">网络环境</p>
+                <p class="text-[11px] text-muted-foreground">
+                  校园网下直连 ehall，跳过 aTrust 网关
+                </p>
+              </div>
+              <Select v-model="netMode">
+                <SelectTrigger class="h-8 w-28 text-xs" size="sm">
+                  <SelectValue placeholder="自动识别" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">自动识别</SelectItem>
+                  <SelectItem value="campus">校园网</SelectItem>
+                  <SelectItem value="offcampus">校外</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <Separator class="my-1" />

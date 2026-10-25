@@ -21,7 +21,7 @@ import (
 //
 // 必须是变量而不是常量: 发布时由 CI 用 -ldflags "-X main.Version=1.2.3" 注入 git tag 对应的版本,
 // 本地 `wails3 task build` 不注入时用下面这个默认值。
-var Version = "1.0.0"
+var Version = "1.1.0"
 
 const (
 	loginTimeout = 150 * time.Second
@@ -50,6 +50,8 @@ type core struct {
 	sess    *seu.Session
 	user    seu.UserInfo
 	cached  *store.Session
+	// network 是最近一次登录实际走的路径 (campus / offcampus), 供界面与日志展示。
+	network string
 
 	// legacyDone 标记旧版磁盘配置只尝试导入一次。
 	legacyDone bool
@@ -190,6 +192,7 @@ func (c *core) settings() Settings {
 		Interval:    c.cfg.Interval,
 		Cooldown:    c.cfg.Cooldown,
 		Theme:       c.cfg.Theme,
+		NetMode:     string(seu.ParseNetMode(c.cfg.NetMode)),
 		HasPassword: c.pass != "",
 	}
 }
@@ -214,6 +217,20 @@ func (c *core) status() Status {
 
 func (c *core) ocrSolver() *ocr.Solver { return c.ocr }
 
+// networkOf 返回最近一次登录走的网络路径。
+func (c *core) networkOf() string {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.network
+}
+
+// netModePref 读取用户选的网络环境 (空值 = 自动探测)。
+func (c *core) netModePref() seu.NetMode {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return seu.ParseNetMode(c.cfg.NetMode)
+}
+
 // --- 登录 -------------------------------------------------------------------
 
 func (c *core) newSession(username, password string) *seu.Session {
@@ -221,6 +238,7 @@ func (c *core) newSession(username, password string) *seu.Session {
 		Username: username,
 		Password: password,
 		Timeout:  30 * time.Second,
+		NetMode:  c.netModePref(),
 		Logf: func(format string, args ...any) {
 			c.logf("[seu] "+format, args...)
 		},
@@ -255,6 +273,7 @@ func (c *core) loginLocked(ctx context.Context, username, password string) (seu.
 	c.stateMu.Lock()
 	c.sess = sess
 	c.user = user
+	c.network = string(sess.Network())
 	c.cfg.Username = username
 	c.pass = password
 	c.cfg.Password = password
@@ -293,6 +312,12 @@ func (c *core) restoreSession(ctx context.Context) (seu.UserInfo, bool) {
 	sess := c.newSession(cached.Username, "")
 	sess.LoadCookies(cached.Cookies)
 	if _, _, err := sess.Activities(ctx); err != nil {
+		// 网络不通 != 会话失效: 校园网/校外切换时如果把本地会话删了, 用户回来
+		// 还得重新输密码。只有服务端明确不认这个会话才清缓存。
+		if seu.IsUnreachable(err) {
+			c.logf("网络不可用, 保留本地会话: %v", err)
+			return seu.UserInfo{}, false
+		}
 		c.logf("Cookie 会话已失效: %v", err)
 		c.store.ClearSession()
 		c.stateMu.Lock()
@@ -458,7 +483,7 @@ func (s *SessionService) Login(ctx context.Context, username, password string, r
 	if err != nil {
 		return LoginResult{}, err
 	}
-	return LoginResult{User: user, Source: "manual"}, nil
+	return LoginResult{User: user, Source: "manual", Network: c.networkOf()}, nil
 }
 
 // AutoLogin 依次尝试 Cookie 缓存与已保存的密码。
@@ -482,7 +507,7 @@ func (s *SessionService) AutoLogin(ctx context.Context) (LoginResult, error) {
 	if err != nil {
 		return LoginResult{}, err
 	}
-	return LoginResult{User: user, Source: "password"}, nil
+	return LoginResult{User: user, Source: "password", Network: c.networkOf()}, nil
 }
 
 // Logout 退出登录并清除本地会话缓存。
@@ -541,6 +566,7 @@ func (s *SessionService) SaveSettings(ctx context.Context, in Settings) (Setting
 	c.cfg.Interval = in.Interval
 	c.cfg.Cooldown = in.Cooldown
 	c.cfg.Theme = in.Theme
+	c.cfg.NetMode = string(seu.ParseNetMode(in.NetMode))
 	if !in.Remember {
 		c.pass = ""
 		c.cfg.Password = ""

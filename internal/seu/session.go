@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -23,6 +24,8 @@ const (
 	AppService = "http://ehall.seu.edu.cn/gsapp/sys/jzxxtjapp/*default/index.do"
 	AppURL     = "https://ehall.seu.edu.cn/gsapp/sys/jzxxtjapp/*default/index.do"
 	APIBase    = "https://ehall.seu.edu.cn/gsapp/sys/jzxxtjapp/hdyy/"
+	// EhallRoot 只用于网络探测: 校外访问它会 302 到 aTrust 网关。
+	EhallRoot = "https://ehall.seu.edu.cn/"
 
 	EPActivity = APIBase + "queryActivityList.do"   // 讲座活动列表
 	EPMy       = APIBase + "queryMyActivityList.do" // 我的预约
@@ -40,6 +43,33 @@ const (
 	TimeLayout = "2006-01-02 15:04:05"
 )
 
+// NetMode 决定登录走哪条网络路径。
+//
+// 校外的路径是 CAS -> aTrust 网关 -> ehall; 校园网本来就在内网, 那个网关通常
+// 连不上, 只需要 CAS -> ehall。默认 auto, 由探测决定走哪条。
+type NetMode string
+
+const (
+	// NetAuto 先探一次 ehall 是否直连可达, 再决定路径 (默认)。
+	NetAuto NetMode = "auto"
+	// NetCampus 校园网: 直连 ehall, 跳过 aTrust 网关。
+	NetCampus NetMode = "campus"
+	// NetOffCampus 校外: 先过 aTrust 网关, 再访问 ehall。
+	NetOffCampus NetMode = "offcampus"
+)
+
+// ParseNetMode 把配置里的字符串转成 NetMode, 空值和未知值都按 auto 处理。
+func ParseNetMode(v string) NetMode {
+	switch NetMode(strings.TrimSpace(v)) {
+	case NetCampus:
+		return NetCampus
+	case NetOffCampus:
+		return NetOffCampus
+	default:
+		return NetAuto
+	}
+}
+
 // ErrSessionExpired 表示 ehall 会话已失效, 需要重新登录。
 var ErrSessionExpired = errors.New("登录状态已失效, 请重新登录")
 
@@ -47,7 +77,12 @@ var ErrSessionExpired = errors.New("登录状态已失效, 请重新登录")
 type LoginError struct {
 	Stage string
 	Msg   string
+	// Cause 是原始错误, 用来区分「网络不可达」和「业务拒绝」。
+	Cause error
 }
+
+// Unwrap 让 errors.Is / errors.As 能穿透 LoginError 看到底层的网络错误。
+func (e *LoginError) Unwrap() error { return e.Cause }
 
 func (e *LoginError) Error() string {
 	if e.Stage == "" {
@@ -62,6 +97,8 @@ type Config struct {
 	Password string
 	Timeout  time.Duration
 	Debug    bool
+	// NetMode 指定网络环境; 留空等价于 NetAuto (自动探测)。
+	NetMode NetMode
 	// Logf 接收登录/接口调用过程中的调试信息, 可为 nil。
 	Logf func(format string, args ...any)
 }
@@ -85,6 +122,7 @@ type Session struct {
 	follow *http.Client // 跟随重定向
 
 	csrf          string
+	netMode       NetMode // 本次登录实际走的路径 (探测结果)
 	portalReferer string
 	user          UserInfo
 	userRaw       map[string]any
@@ -175,6 +213,19 @@ func (s *Session) Restore(user UserInfo) {
 	s.mu.Lock()
 	s.user = user
 	s.loggedIn = true
+	s.mu.Unlock()
+}
+
+// Network 返回本次登录实际走的网络路径 (自动探测的结果)。
+func (s *Session) Network() NetMode {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.netMode
+}
+
+func (s *Session) setNetMode(mode NetMode) {
+	s.mu.Lock()
+	s.netMode = mode
 	s.mu.Unlock()
 }
 

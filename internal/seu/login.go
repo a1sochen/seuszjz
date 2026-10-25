@@ -5,11 +5,21 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"time"
 )
+
+// probeTimeout 是登录前网络探测的超时。探测只是一次匿名 GET, 正常几十毫秒,
+// 留 6 秒是为了容忍网络抖动, 同时不至于让用户久等。
+const probeTimeout = 6 * time.Second
+
+// directTimeout 是「直连 ehall 试一次」的时间预算。自动探测判成校园网、实际
+// 直连却走不通时, 不能让人干等 appLogin 内部的多轮重试, 所以这条路单独限时。
+const directTimeout = 15 * time.Second
 
 // stageFunc 接收登录进度回调 (stage 用于分组, msg 为人类可读描述)。
 type stageFunc func(stage, msg string)
@@ -20,7 +30,13 @@ func (s *Session) progress(fn stageFunc, stage, msg string) {
 	}
 }
 
-// Login 执行完整登录流程: CAS → aTrust 网关 → ehall 应用会话。
+// Login 执行完整登录流程。
+//
+// 校外: CAS -> aTrust 网关 -> ehall; 校园网: CAS -> ehall (跳过网关)。
+// 走哪条路由 Config.NetMode 决定, 默认 auto: 先匿名请求一次 ehall 首页, 看它
+// 会不会被网关 302 到 vpn.seu.edu.cn, 据此判断要不要过网关。
+// 两条路互为兜底, 但只有「网络不可达」才换路; 密码错误、票据为空之类的业务
+// 失败直接报错, 不做无谓重试。
 func (s *Session) Login(ctx context.Context, progress func(stage, msg string)) error {
 	s.Reset()
 	if strings.TrimSpace(s.cfg.Username) == "" {
@@ -32,17 +48,154 @@ func (s *Session) Login(ctx context.Context, progress func(stage, msg string)) e
 	if err := s.casLogin(ctx, progress); err != nil {
 		return err
 	}
-	if err := s.portalLogin(ctx, progress); err != nil {
+
+	var err error
+	if s.resolveNetMode(ctx) == NetCampus {
+		err = s.loginEhallDirect(ctx, progress)
+		if err != nil {
+			// 少数校内节点仍然要求先过网关, 按老路再试一次。
+			s.progress(progress, "portal", "直连 ehall 未成功, 改用 aTrust 网关重试")
+			s.setNetMode(NetOffCampus)
+			if perr := s.portalLogin(ctx, progress); perr != nil {
+				return err
+			}
+			err = s.loginEhall(ctx, progress)
+		}
+	} else {
+		err = s.portalLogin(ctx, progress)
+		if err == nil {
+			err = s.loginEhall(ctx, progress)
+		} else if IsUnreachable(err) {
+			// 网关根本连不上 (校园网、或 DNS/路由异常): 直接换直连。
+			s.progress(progress, "portal", "aTrust 网关不可达, 改为直连 ehall")
+			s.setNetMode(NetCampus)
+			if derr := s.loginEhallDirect(ctx, progress); derr == nil {
+				err = nil
+			} else {
+				s.setNetMode(NetOffCampus)
+			}
+		}
+	}
+	if err != nil {
 		return err
 	}
-	if err := s.appLogin(ctx, progress); err != nil {
-		return err
-	}
+
 	s.mu.Lock()
 	s.loggedIn = true
 	s.mu.Unlock()
 	s.progress(progress, "done", "登录成功")
 	return nil
+}
+
+// loginEhall 换取 ehall 会话, 直连与过网关两条路共用。
+//
+// 直连时拿不到网关的 onlineInfo, 用户信息退化为学号; 界面照常显示,
+// 不能因为缺个昵称就判登录失败。
+func (s *Session) loginEhall(ctx context.Context, progress func(stage, msg string)) error {
+	if err := s.appLogin(ctx, progress); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.user.Username == "" {
+		name := s.cfg.Username
+		s.user = UserInfo{Username: name, DisplayName: name, Online: true}
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+// loginEhallDirect 是带时间预算的直连尝试: 超时或失败由调用方决定是否换路。
+func (s *Session) loginEhallDirect(ctx context.Context, progress func(stage, msg string)) error {
+	directCtx, cancel := context.WithTimeout(ctx, directTimeout)
+	defer cancel()
+	return s.loginEhall(directCtx, progress)
+}
+
+// resolveNetMode 决定这次登录走直连还是 aTrust 网关。
+func (s *Session) resolveNetMode(ctx context.Context) NetMode {
+	mode := ParseNetMode(string(s.cfg.NetMode))
+	if mode != NetAuto {
+		s.setNetMode(mode)
+		return mode
+	}
+	mode = s.probeNetMode(ctx)
+	s.setNetMode(mode)
+	s.logf("网络探测结果: %s", mode)
+	return mode
+}
+
+// probeNetMode 用一次匿名的 ehall 请求判断要不要过 aTrust 网关。
+//
+// 校外访问 ehall 会被网关截住, 302 到 vpn.seu.edu.cn/controller/v1/public/verify;
+// 校园网内不会有这一跳 (直接给应用页, 或者跳统一身份认证)。这个信号比「vpn 域名
+// 通不通」可靠得多: ehall 和 vpn 在公网都解析到公网 IP、443 都能连, 拨号探测
+// 区分不了两者。
+func (s *Session) probeNetMode(ctx context.Context) NetMode {
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+
+	resp, err := s.do(probeCtx, request{method: "GET", target: EhallRoot})
+	if err != nil {
+		// 探测失败 (断网/DNS 异常) 时按校外处理: 校外是默认场景, 且网关路径
+		// 在校园网里连不上时还会回落到直连。
+		s.logf("网络探测失败 (%v), 按校外处理", err)
+		return NetOffCampus
+	}
+	location := strings.ToLower(resp.header.Get("Location"))
+	if strings.Contains(location, "vpn.seu.edu.cn") {
+		return NetOffCampus
+	}
+	return NetCampus
+}
+
+// IsUnreachable 判断错误是否属于「这条路根本不通」(DNS 失败、拨号超时、
+// 连接被拒), 用来决定换一条网络路径, 而不是直接把错误抛给用户。
+func IsUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, hint := range []string{
+		"i/o timeout",
+		"no such host",
+		"connection refused",
+		"connection reset",
+		"network is unreachable",
+		"tls handshake timeout",
+		"connectex",
+	} {
+		if strings.Contains(msg, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+// stageError 包装带原始原因的错误, 让上层能分辨网络问题还是业务问题。
+func stageError(stage string, err error) error {
+	return &LoginError{Stage: stage, Msg: err.Error(), Cause: err}
 }
 
 // casLogin: 统一身份认证, 用 RSA 加密后的密码换取 CAS 会话。
@@ -154,7 +307,7 @@ func (s *Session) portalLogin(ctx context.Context, progress func(stage, msg stri
 			"Referer": AuthBase + "/dist/",
 		},
 	}, &ticketInfo); err != nil {
-		return &LoginError{Stage: "aTrust 网关", Msg: err.Error()}
+		return stageError("aTrust 网关", err)
 	}
 	redirect := rawString(ticketInfo["redirectUrl"])
 	if redirect == "" {
@@ -163,7 +316,7 @@ func (s *Session) portalLogin(ctx context.Context, progress func(stage, msg stri
 
 	resp, err := s.do(ctx, request{method: "GET", target: redirect})
 	if err != nil {
-		return &LoginError{Stage: "aTrust 网关", Msg: err.Error()}
+		return stageError("aTrust 网关", err)
 	}
 	location := resp.header.Get("Location")
 	if location == "" {
@@ -186,7 +339,7 @@ func (s *Session) portalLogin(ctx context.Context, progress func(stage, msg stri
 	referer := resolveURL(PortalBase, location)
 	s.portalReferer = referer
 	if _, err := s.do(ctx, request{method: "GET", target: referer}); err != nil {
-		return &LoginError{Stage: "aTrust 网关", Msg: err.Error()}
+		return stageError("aTrust 网关", err)
 	}
 
 	deviceID := newDeviceID()
@@ -211,7 +364,7 @@ func (s *Session) portalLogin(ctx context.Context, progress func(stage, msg stri
 			},
 		},
 	}); err != nil {
-		return &LoginError{Stage: "aTrust 网关", Msg: err.Error()}
+		return stageError("aTrust 网关", err)
 	}
 
 	var check map[string]any
@@ -221,7 +374,7 @@ func (s *Session) portalLogin(ctx context.Context, progress func(stage, msg stri
 		query:   portalParams(),
 		headers: envHeaders,
 	}, &check); err != nil {
-		return &LoginError{Stage: "aTrust 网关", Msg: err.Error()}
+		return stageError("aTrust 网关", err)
 	}
 	if rawString(check["code"]) != "0" {
 		return &LoginError{Stage: "aTrust 网关", Msg: "网关在线校验失败: " + rawString(check["message"])}

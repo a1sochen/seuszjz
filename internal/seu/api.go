@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -102,7 +103,51 @@ func (s *Session) Activities(ctx context.Context) ([]Lecture, time.Time, error) 
 	for i := range lectures {
 		lectures[i].Status = DeriveStatus(lectures[i], clock)
 	}
+	sortLectures(lectures)
 	return lectures, clock, nil
+}
+
+// lectureSortRank 是列表的第一排序键: 先按大类分组, 再在组内比时间。
+//
+// 0 已满 / 1 可预约 / 2 未开放 是用户关心的三大类; 「已预约」「已结束」这些
+// 用户没有归类的状态排在它们之后 (已预约在「我的预约」页里看更直接)。
+// 后端接口按发布顺序返回数据 (基本倒序), 所以这里统一排一次。
+func lectureSortRank(status string) int {
+	switch status {
+	case StatusFull:
+		return 0
+	case StatusAvailable:
+		return 1
+	case StatusNotOpen:
+		return 2
+	case StatusBooked, StatusCheckedIn, StatusDefaulted:
+		return 3
+	default: // ended / cancelled 及其它
+		return 4
+	}
+}
+
+// sortLectures 先按大类分组, 组内按讲座时间正序 (同一时间再按名称), 保证顺序稳定。
+func sortLectures(items []Lecture) {
+	sort.SliceStable(items, func(i, j int) bool {
+		a, b := items[i], items[j]
+		aRank, bRank := lectureSortRank(a.Status), lectureSortRank(b.Status)
+		if aRank != bRank {
+			return aRank < bRank
+		}
+		aAt, aOK := ParseTime(a.StartAt)
+		bAt, bOK := ParseTime(b.StartAt)
+		switch {
+		case aOK && bOK:
+			if !aAt.Equal(bAt) {
+				return aAt.Before(bAt)
+			}
+		case aOK != bOK:
+			// 没有讲座时间的排在有时间的后面, 但仍在同一大类里。
+			return aOK
+		}
+		return a.Name < b.Name
+	})
 }
 
 // MyActivities 拉取我的预约。
