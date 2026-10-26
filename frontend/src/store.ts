@@ -498,10 +498,16 @@ export async function solveCaptcha(image: string): Promise<string> {
 
 // --- 抢座 -------------------------------------------------------------------
 
-export function startGrab(wid: string, interval: number, cooldown: number, autoCaptcha: boolean): void {
+export function startGrab(
+  wid: string,
+  waitMs: number,
+  attemptMs: number,
+  cooldown: number,
+  autoCaptcha: boolean,
+): void {
   void (async () => {
     try {
-      state.grab = await GrabService.Start(wid, interval, cooldown, autoCaptcha);
+      state.grab = await GrabService.Start(wid, waitMs, attemptMs, cooldown, autoCaptcha);
       state.grabTarget = wid;
       toast("info", "抢座任务已启动");
     } catch (e) {
@@ -526,6 +532,14 @@ export async function submitGrabCode(code: string): Promise<boolean> {
   } catch (e) {
     toast("err", errorText(e));
     return false;
+  }
+}
+
+export async function clearGrabLogs(): Promise<void> {
+  try {
+    state.grab = await GrabService.ClearLogs();
+  } catch (e) {
+    toast("err", errorText(e));
   }
 }
 

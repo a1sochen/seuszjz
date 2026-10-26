@@ -15,6 +15,13 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 import * as grab$0 from "./internal/grab/models.js";
 
 /**
+ * ClearLogs 清空抢座日志。
+ */
+export function ClearLogs(): $CancellablePromise<grab$0.State> {
+    return $Call.ByID(1431433547);
+}
+
+/**
  * RefreshCaptcha 换一张验证码。
  */
 export function RefreshCaptcha(): $CancellablePromise<grab$0.State> {
@@ -24,8 +31,8 @@ export function RefreshCaptcha(): $CancellablePromise<grab$0.State> {
 /**
  * Start 启动抢座任务。
  */
-export function Start(wid: string, interval: number, cooldown: number, autoCaptcha: boolean): $CancellablePromise<grab$0.State> {
-    return $Call.ByID(4196200765, wid, interval, cooldown, autoCaptcha);
+export function Start(wid: string, waitMs: number, attemptMs: number, cooldown: number, autoCaptcha: boolean): $CancellablePromise<grab$0.State> {
+    return $Call.ByID(4196200765, wid, waitMs, attemptMs, cooldown, autoCaptcha);
 }
 
 /**

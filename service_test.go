@@ -26,7 +26,8 @@ func sampleSnapshot(t *testing.T) string {
 		Remember:    true,
 		AutoLogin:   true,
 		AutoCaptcha: true,
-		Interval:    7,
+		WaitMs:      7000,
+		AttemptMs:   250,
 		Cooldown:    60,
 		Theme:       "light",
 	})
@@ -58,7 +59,7 @@ func TestBootstrapWithoutSavedState(t *testing.T) {
 	if boot.Status.HasSession || boot.Status.LoggedIn || boot.Settings.HasPassword {
 		t.Fatalf("没有快照时不应有登录信息: %+v", boot.Status)
 	}
-	if !boot.Settings.AutoLogin || boot.Settings.Interval != 3 || boot.Settings.Theme != "dark" {
+	if !boot.Settings.AutoLogin || boot.Settings.WaitMs != 1000 || boot.Settings.Theme != "dark" {
 		t.Fatalf("默认设置不正确: %+v", boot.Settings)
 	}
 
@@ -86,7 +87,7 @@ func TestBootstrapRestoresSnapshot(t *testing.T) {
 	if boot.Status.User.DisplayName != "张三" {
 		t.Fatalf("用户信息没恢复: %+v", boot.Status.User)
 	}
-	if boot.Settings.Interval != 7 || boot.Settings.Cooldown != 60 || boot.Settings.Theme != "light" || !boot.Settings.HasPassword {
+	if boot.Settings.WaitMs != 7000 || boot.Settings.Cooldown != 60 || boot.Settings.Theme != "light" || !boot.Settings.HasPassword {
 		t.Fatalf("设置没恢复: %+v", boot.Settings)
 	}
 
@@ -106,7 +107,7 @@ func TestBootstrapRestoresSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("再次 Bootstrap: %v", err)
 	}
-	if !again.Status.HasSession || again.Settings.Interval != 7 {
+	if !again.Status.HasSession || again.Settings.WaitMs != 7000 {
 		t.Fatalf("快照不能再交回: %+v %+v", again.Status, again.Settings)
 	}
 }
@@ -124,7 +125,7 @@ func TestBootstrapIgnoresSnapshotWhenLoggedIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	if boot.Status.SavedUsername != "" || boot.Settings.Interval != 3 || boot.Status.HasSession {
+	if boot.Status.SavedUsername != "" || boot.Settings.WaitMs != 1000 || boot.Status.HasSession {
 		t.Fatalf("登录后不应再采纳快照: %+v %+v", boot.Status, boot.Settings)
 	}
 }
@@ -133,7 +134,7 @@ func TestBootstrapImportsLegacyFiles(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("SEUSZJZ_DATA_DIR", dir)
 
-	cfg, err := json.Marshal(store.Config{Username: "220000001", Remember: true, Interval: 9})
+	cfg, err := json.Marshal(store.Config{Username: "220000001", Remember: true, WaitMs: 9000, AttemptMs: 200})
 	if err != nil {
 		t.Fatalf("序列化配置: %v", err)
 	}
@@ -156,7 +157,7 @@ func TestBootstrapImportsLegacyFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	if boot.Status.SavedUsername != "220000001" || !boot.Status.HasSession || boot.Settings.Interval != 9 {
+	if boot.Status.SavedUsername != "220000001" || !boot.Status.HasSession || boot.Settings.WaitMs != 9000 {
 		t.Fatalf("旧版配置没导进来: %+v %+v", boot.Status, boot.Settings)
 	}
 	var st store.State

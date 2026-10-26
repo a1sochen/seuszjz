@@ -29,6 +29,14 @@ const (
 
 var codePattern = regexp.MustCompile(`^[0-9A-Za-z]{4}$`)
 
+const (
+	// maxLogs 是状态里保留的日志条数 (界面只渲染这些)。
+	maxLogs = 400
+	// logsClearAt 是自动清屏阈值: 累计超过就整段清掉只留一条标记。
+	// 提交间隔可以低到 50ms, 不设上限的话几秒钟就能攒出上万条。
+	logsClearAt = 1000
+)
+
 // LogEntry 是一条抢座日志。
 type LogEntry struct {
 	At    string `json:"at"`
@@ -43,13 +51,16 @@ type State struct {
 	Name         string     `json:"name"`
 	Phase        string     `json:"phase"`
 	Message      string     `json:"message"`
+	Round        int        `json:"round"` // 已经轮询了多少轮
 	Attempts     int        `json:"attempts"`
+	LogsDropped  int        `json:"logsDropped"` // 因刷屏被自动清掉的日志条数
 	CaptchaCount int        `json:"captchaCount"`
 	Captcha      string     `json:"captcha"` // data:image/jpeg;base64,... 需要手动输入时展示
 	CaptchaAt    string     `json:"captchaAt"`
 	StartedAt    string     `json:"startedAt"`
 	UpdatedAt    string     `json:"updatedAt"`
-	Interval     int        `json:"interval"`
+	WaitMs       int        `json:"waitMs"`    // 等待开放时的轮询间隔 (毫秒)
+	AttemptMs    int        `json:"attemptMs"` // 开放后两次提交的间隔 (毫秒)
 	Cooldown     int        `json:"cooldown"`
 	AutoCaptcha  bool       `json:"autoCaptcha"`
 	Success      bool       `json:"success"`
@@ -65,9 +76,12 @@ type API interface {
 
 // Options 是启动参数。
 type Options struct {
-	WID      string
-	Interval time.Duration
-	Cooldown time.Duration
+	WID string
+	// WaitInterval 是等待开放 / 等退订时的轮询间隔 (慢节奏)。
+	WaitInterval time.Duration
+	// AttemptInterval 是已经可以预约时, 两次提交之间的间隔 (快节奏)。
+	AttemptInterval time.Duration
+	Cooldown        time.Duration
 	// Solve 为 nil 表示只能手动输入验证码。
 	Solve   func(ctx context.Context, jpeg []byte) (string, error)
 	OnState func(State)
@@ -84,6 +98,13 @@ type Engine struct {
 	manual chan string
 	reload chan struct{}
 	opts   Options
+
+	// lastStatus / sameCount 用于把「连续多轮状态没变」合并成一条日志。
+	lastStatus string
+	sameCount  int
+	// logged 是本次任务累计写入的日志条数, 用于按累计量触发自动清屏
+	// (只看当前长度的话, 环形截断会让长度永远到不了阈值)。
+	logged int
 }
 
 // New 创建一个引擎。
@@ -120,14 +141,19 @@ func (e *Engine) Start(ctx context.Context, api API, opts Options) error {
 		e.mu.Unlock()
 		return errors.New("抢座任务已在运行")
 	}
-	if opts.Interval <= 0 {
-		opts.Interval = 3 * time.Second
+	if opts.WaitInterval <= 0 {
+		opts.WaitInterval = time.Second
 	}
-	if opts.Cooldown <= 0 {
-		opts.Cooldown = 5 * time.Minute
+	if opts.AttemptInterval <= 0 {
+		opts.AttemptInterval = 300 * time.Millisecond
+	}
+	if opts.Cooldown < 0 {
+		opts.Cooldown = 0 // 0 表示「被限流后不冷却」, 由用户显式选择
 	}
 	e.api = api
 	e.opts = opts
+	e.lastStatus = ""
+	e.sameCount = 0
 	runCtx, cancel := context.WithCancel(ctx)
 	e.cancel = cancel
 	e.done = make(chan struct{})
@@ -140,7 +166,8 @@ func (e *Engine) Start(ctx context.Context, api API, opts Options) error {
 		Message:     "正在启动",
 		StartedAt:   now(),
 		UpdatedAt:   now(),
-		Interval:    int(opts.Interval / time.Second),
+		WaitMs:      int(opts.WaitInterval / time.Millisecond),
+		AttemptMs:   int(opts.AttemptInterval / time.Millisecond),
 		Cooldown:    int(opts.Cooldown / time.Second),
 		AutoCaptcha: opts.Solve != nil,
 		Logs:        []LogEntry{},
@@ -149,7 +176,7 @@ func (e *Engine) Start(ctx context.Context, api API, opts Options) error {
 	e.mu.Unlock()
 
 	e.emit(snapshot)
-	go e.run(runCtx)
+	go e.run(runCtx, e.done)
 	return nil
 }
 
@@ -194,8 +221,8 @@ func (e *Engine) RefreshCaptcha() {
 	}
 }
 
-func (e *Engine) run(ctx context.Context) {
-	defer close(e.done)
+func (e *Engine) run(ctx context.Context, done chan struct{}) {
+	defer close(done)
 	defer func() {
 		e.mu.Lock()
 		e.state.Running = false
@@ -236,7 +263,8 @@ func (e *Engine) run(ctx context.Context) {
 
 // round 执行一轮检查, 返回是否结束。
 func (e *Engine) round(ctx context.Context) (bool, error) {
-	activities, _, err := e.api.Activities(ctx)
+	e.update(func(s *State) { s.Round++ })
+	activities, clock, err := e.api.Activities(ctx)
 	if err != nil {
 		return false, fmt.Errorf("读取讲座列表失败: %w", err)
 	}
@@ -262,16 +290,23 @@ func (e *Engine) round(ctx context.Context) (bool, error) {
 	case seu.StatusEnded, seu.StatusCancelled:
 		return true, errors.New("讲座已结束或已取消")
 	case seu.StatusFull, seu.StatusNotOpen:
-		text := "名额已满, 等待退订"
+		text := fmt.Sprintf("名额已满 %d/%d, 等待退订", target.Booked, target.Capacity)
 		if target.Status == seu.StatusNotOpen {
 			text = "尚未开放预约, 等待中"
+			if start, ok := seu.ParseTime(target.BookStartAt); ok {
+				if left := start.Sub(clock); left > 0 {
+					text = fmt.Sprintf("尚未开放 · 预约 %s 开放 · 还有 %s",
+						target.BookStartAt, shortDuration(left))
+				}
+			}
 		}
+		e.logStatus(text)
 		e.update(func(s *State) {
 			s.Phase = PhaseWaiting
 			s.Message = text
 			s.Captcha = ""
 		})
-		return false, e.sleep(ctx, e.opts.Interval)
+		return false, e.sleep(ctx, e.opts.WaitInterval)
 	case seu.StatusAvailable:
 		return e.attempt(ctx, target)
 	default:
@@ -292,20 +327,30 @@ func (e *Engine) attempt(ctx context.Context, target *seu.Lecture) (bool, error)
 		if ctx.Err() != nil {
 			return true, ctx.Err()
 		}
+		// 已经可以预约了: 两次提交之间只隔一个「开放后间隔」, 节奏要快。
+		if try > 0 {
+			if err := e.sleep(ctx, e.opts.AttemptInterval); err != nil {
+				return true, err
+			}
+		}
+		fetchAt := time.Now()
 		jpeg, err := e.api.FetchCaptcha(ctx)
 		if err != nil {
 			return false, fmt.Errorf("获取验证码失败: %w", err)
 		}
+		fetchMs := time.Since(fetchAt).Milliseconds()
 		e.update(func(s *State) {
 			s.CaptchaCount++
 		})
 
 		code := ""
+		solveMs := int64(0)
 		if e.opts.Solve != nil {
+			solveAt := time.Now()
 			solved, solveErr := e.opts.Solve(ctx, jpeg)
+			solveMs = time.Since(solveAt).Milliseconds()
 			if solveErr == nil && codePattern.MatchString(solved) {
 				code = solved
-				e.logf("info", "自动识别验证码: "+solved)
 			} else if solveErr != nil {
 				e.logf("warn", "自动识别失败: "+solveErr.Error())
 			} else {
@@ -331,11 +376,28 @@ func (e *Engine) attempt(ctx context.Context, target *seu.Lecture) (bool, error)
 			code = manual
 		}
 
+		submitAt := time.Now()
 		result, err := e.api.Reserve(ctx, target.WID, code)
 		if err != nil {
 			return false, fmt.Errorf("提交预约失败: %w", err)
 		}
-		e.logf(levelFor(result), result.Message)
+		submitMs := time.Since(submitAt).Milliseconds()
+
+		// 每次尝试用一行摘要代替原来多条零散日志; 前 3 次都记, 之后每 3 次记一条,
+		// 非「验证码错误」的结论 (成功/已满/限流/关闭) 一律记。
+		recognized := "手动"
+		if code != "" {
+			recognized = code
+		}
+		if solveMs > 0 {
+			recognized = fmt.Sprintf("%s/%dms", recognized, solveMs)
+		}
+		if try < 3 || try%3 == 0 || result.Kind != "vcode" {
+			e.logf(levelFor(result), fmt.Sprintf(
+				"第 %d 次尝试：取码 %dms · 识别 %s · 提交 %dms → %s",
+				try+1, fetchMs, recognized, submitMs, result.Message,
+			))
+		}
 
 		switch result.Kind {
 		case "ok":
@@ -349,6 +411,10 @@ func (e *Engine) attempt(ctx context.Context, target *seu.Lecture) (bool, error)
 				s.Message = "请求过于频繁, 冷却中"
 				s.Captcha = ""
 			})
+			if e.opts.Cooldown <= 0 {
+				e.logf("warn", "触发限流, 冷却已设为 0, 立即重试")
+				return false, nil
+			}
 			e.logf("warn", fmt.Sprintf("触发限流, 冷却 %s", e.opts.Cooldown))
 			return false, e.sleep(ctx, e.opts.Cooldown)
 		case "vcode":
@@ -360,7 +426,7 @@ func (e *Engine) attempt(ctx context.Context, target *seu.Lecture) (bool, error)
 				s.Message = "名额已满, 继续等待"
 				s.Captcha = ""
 			})
-			return false, e.sleep(ctx, e.opts.Interval)
+			return false, e.sleep(ctx, e.opts.WaitInterval)
 		case "duplicated":
 			e.succeed(target, result.Message)
 			return true, nil
@@ -374,7 +440,7 @@ func (e *Engine) attempt(ctx context.Context, target *seu.Lecture) (bool, error)
 			if result.Kind == "other" && strings.Contains(result.Message, "验证码") {
 				continue
 			}
-			return false, e.sleep(ctx, e.opts.Interval)
+			return false, e.sleep(ctx, e.opts.AttemptInterval)
 		}
 	}
 
@@ -383,7 +449,7 @@ func (e *Engine) attempt(ctx context.Context, target *seu.Lecture) (bool, error)
 		s.Message = "多次提交未成功, 继续等待"
 		s.Captcha = ""
 	})
-	return false, e.sleep(ctx, e.opts.Interval)
+	return false, e.sleep(ctx, e.opts.WaitInterval)
 }
 
 var (
@@ -459,12 +525,59 @@ func (e *Engine) currentWID() string {
 
 func (e *Engine) logf(level, text string) {
 	e.mu.Lock()
-	entry := LogEntry{At: now(), Level: level, Text: text}
-	logs := append(e.state.Logs, entry)
-	if len(logs) > 200 {
-		logs = logs[len(logs)-200:]
+	e.logged++
+	dropped := 0
+	logs := append(e.state.Logs, LogEntry{At: now(), Level: level, Text: text})
+	switch {
+	case e.logged%logsClearAt == 0:
+		// 刷屏保护: 每累计 logsClearAt 条就整段清掉, 只留一条标记供界面显示。
+		dropped = len(logs)
+		logs = []LogEntry{{
+			At:    now(),
+			Level: "info",
+			Text:  fmt.Sprintf("—— 日志已自动清屏（丢弃 %d 条）——", dropped),
+		}}
+	case len(logs) > maxLogs:
+		logs = logs[len(logs)-maxLogs:]
 	}
 	e.state.Logs = logs
+	e.state.LogsDropped += dropped
+	e.state.UpdatedAt = now()
+	snapshot := e.cloneLocked()
+	e.mu.Unlock()
+	e.emit(snapshot)
+}
+
+// logStatus 记录「这一轮查到的状态」, 做两层节流, 避免几百毫秒一轮时刷屏:
+//   - 状态变了: 立刻写一条;
+//   - 状态没变: 每 10 轮才合并写一条, 带上持续次数。
+func (e *Engine) logStatus(text string) {
+	e.mu.Lock()
+	changed := e.lastStatus != text
+	if changed {
+		e.lastStatus = text
+		e.sameCount = 1
+	} else {
+		e.sameCount++
+	}
+	count := e.sameCount
+	e.mu.Unlock()
+
+	if changed {
+		e.logf("info", text)
+		return
+	}
+	if count%10 == 0 {
+		e.logf("info", fmt.Sprintf("… 状态未变（已连续 %d 轮）：%s", count, text))
+	}
+}
+
+// ClearLogs 手动清屏。
+func (e *Engine) ClearLogs() {
+	e.mu.Lock()
+	cleared := len(e.state.Logs)
+	e.state.Logs = []LogEntry{}
+	e.state.LogsDropped += cleared
 	e.state.UpdatedAt = now()
 	snapshot := e.cloneLocked()
 	e.mu.Unlock()
@@ -501,6 +614,29 @@ func (e *Engine) sleep(ctx context.Context, d time.Duration) error {
 }
 
 func now() string { return seu.Now().Format("15:04:05") }
+
+// shortDuration 把时长压成「2 小时 5 分」这样的两段式文案。
+func shortDuration(d time.Duration) string {
+	if d <= 0 {
+		return "0 秒"
+	}
+	switch {
+	case d >= time.Hour:
+		h := int(d / time.Hour)
+		if m := int((d % time.Hour) / time.Minute); m > 0 {
+			return fmt.Sprintf("%d 小时 %d 分", h, m)
+		}
+		return fmt.Sprintf("%d 小时", h)
+	case d >= time.Minute:
+		m := int(d / time.Minute)
+		if s := int((d % time.Minute) / time.Second); s > 0 {
+			return fmt.Sprintf("%d 分 %d 秒", m, s)
+		}
+		return fmt.Sprintf("%d 分", m)
+	default:
+		return fmt.Sprintf("%d 秒", int(d/time.Second))
+	}
+}
 
 func levelFor(result seu.Result) string {
 	switch {

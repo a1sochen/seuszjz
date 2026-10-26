@@ -78,7 +78,12 @@ export interface Settings {
     "remember": boolean;
     "autoLogin": boolean;
     "autoCaptcha": boolean;
-    "interval": number;
+
+    /**
+     * WaitMs 是等待开放时的轮询间隔 (毫秒); AttemptMs 是开放后两次提交的间隔 (毫秒)。
+     */
+    "waitMs": number;
+    "attemptMs": number;
     "cooldown": number;
     "theme": string;
 
