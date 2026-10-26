@@ -42,18 +42,25 @@ const autoCaptcha = computed({
 
 
 
-const interval = ref(settings.value?.interval ?? 3);
+const waitMs = ref(settings.value?.waitMs ?? 1000);
+const attemptMs = ref(settings.value?.attemptMs ?? 300);
 const cooldown = ref(settings.value?.cooldown ?? 300);
 
 watch(settings, (value) => {
   if (!value) return;
-  interval.value = value.interval;
+  waitMs.value = value.waitMs;
+  attemptMs.value = value.attemptMs;
   cooldown.value = value.cooldown;
 });
 
-function saveInterval(): void {
-  if (!settings.value || interval.value === settings.value.interval) return;
-  void saveSettings({ interval: interval.value });
+function saveWait(): void {
+  if (!settings.value || waitMs.value === settings.value.waitMs) return;
+  void saveSettings({ waitMs: waitMs.value });
+}
+
+function saveAttempt(): void {
+  if (!settings.value || attemptMs.value === settings.value.attemptMs) return;
+  void saveSettings({ attemptMs: attemptMs.value });
 }
 
 function saveCooldown(): void {
@@ -141,29 +148,46 @@ function saveCooldown(): void {
 
             <div class="flex items-center justify-between gap-4 rounded-md border px-3 py-2.5">
               <div class="space-y-0.5">
-                <Label for="interval" class="text-xs font-medium">轮询间隔（秒）</Label>
-                <p class="text-[11px] text-muted-foreground">两次查询之间等待多久</p>
+                <Label for="waitMs" class="text-xs font-medium">等待轮询间隔（毫秒）</Label>
+                <p class="text-[11px] text-muted-foreground">还没开放 / 名额已满时查多久一次，慢一点更稳</p>
               </div>
               <Input
-                id="interval"
-                v-model.number="interval"
+                id="waitMs"
+                v-model.number="waitMs"
                 type="number"
-                min="1"
-                class="h-8 w-20 text-xs tabular-nums"
-                @blur="saveInterval"
+                min="200"
+                step="100"
+                class="h-8 w-24 text-xs tabular-nums"
+                @blur="saveWait"
+              />
+            </div>
+
+            <div class="flex items-center justify-between gap-4 rounded-md border px-3 py-2.5">
+              <div class="space-y-0.5">
+                <Label for="attemptMs" class="text-xs font-medium">提交间隔（毫秒）</Label>
+                <p class="text-[11px] text-muted-foreground">已开放时两次提交之间等多久，快一点更容易抢到</p>
+              </div>
+              <Input
+                id="attemptMs"
+                v-model.number="attemptMs"
+                type="number"
+                min="50"
+                step="50"
+                class="h-8 w-24 text-xs tabular-nums"
+                @blur="saveAttempt"
               />
             </div>
 
             <div class="flex items-center justify-between gap-4 rounded-md border px-3 py-2.5">
               <div class="space-y-0.5">
                 <Label for="cooldown" class="text-xs font-medium">冷却时间（秒）</Label>
-                <p class="text-[11px] text-muted-foreground">触发限流后暂停多久</p>
+                <p class="text-[11px] text-muted-foreground">触发限流后暂停多久，填 0 表示不冷却、立即重试</p>
               </div>
               <Input
                 id="cooldown"
                 v-model.number="cooldown"
                 type="number"
-                min="10"
+                min="0"
                 class="h-8 w-20 text-xs tabular-nums"
                 @blur="saveCooldown"
               />

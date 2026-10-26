@@ -11,9 +11,11 @@ type Settings struct {
 	Remember    bool   `json:"remember"`
 	AutoLogin   bool   `json:"autoLogin"`
 	AutoCaptcha bool   `json:"autoCaptcha"`
-	Interval    int    `json:"interval"`
-	Cooldown    int    `json:"cooldown"`
-	Theme       string `json:"theme"`
+	// WaitMs 是等待开放时的轮询间隔 (毫秒); AttemptMs 是开放后两次提交的间隔 (毫秒)。
+	WaitMs    int    `json:"waitMs"`
+	AttemptMs int    `json:"attemptMs"`
+	Cooldown  int    `json:"cooldown"`
+	Theme     string `json:"theme"`
 	// NetMode 是网络环境偏好: auto / campus / offcampus。
 	NetMode     string `json:"netMode"`
 	HasPassword bool   `json:"hasPassword"`

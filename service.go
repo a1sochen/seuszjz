@@ -189,7 +189,8 @@ func (c *core) settings() Settings {
 		Remember:    c.cfg.Remember,
 		AutoLogin:   c.cfg.AutoLogin,
 		AutoCaptcha: c.cfg.AutoCaptcha,
-		Interval:    c.cfg.Interval,
+		WaitMs:      c.cfg.WaitMs,
+		AttemptMs:   c.cfg.AttemptMs,
 		Cooldown:    c.cfg.Cooldown,
 		Theme:       c.cfg.Theme,
 		NetMode:     string(seu.ParseNetMode(c.cfg.NetMode)),
@@ -563,7 +564,8 @@ func (s *SessionService) SaveSettings(ctx context.Context, in Settings) (Setting
 	c.cfg.Remember = in.Remember
 	c.cfg.AutoLogin = in.AutoLogin
 	c.cfg.AutoCaptcha = in.AutoCaptcha
-	c.cfg.Interval = in.Interval
+	c.cfg.WaitMs = in.WaitMs
+	c.cfg.AttemptMs = in.AttemptMs
 	c.cfg.Cooldown = in.Cooldown
 	c.cfg.Theme = in.Theme
 	c.cfg.NetMode = string(seu.ParseNetMode(in.NetMode))
@@ -712,7 +714,7 @@ func NewGrabService(c *core) *GrabService { return &GrabService{core: c} }
 func (s *GrabService) State() (grab.State, error) { return s.core.eng.State(), nil }
 
 // Start 启动抢座任务。
-func (s *GrabService) Start(ctx context.Context, wid string, interval, cooldown int, autoCaptcha bool) (grab.State, error) {
+func (s *GrabService) Start(ctx context.Context, wid string, waitMs, attemptMs, cooldown int, autoCaptcha bool) (grab.State, error) {
 	c := s.core
 	if strings.TrimSpace(wid) == "" {
 		return grab.State{}, errors.New("请先选择要抢的讲座")
@@ -722,9 +724,10 @@ func (s *GrabService) Start(ctx context.Context, wid string, interval, cooldown 
 	}
 
 	opts := grab.Options{
-		WID:      wid,
-		Interval: time.Duration(interval) * time.Second,
-		Cooldown: time.Duration(cooldown) * time.Second,
+		WID:             wid,
+		WaitInterval:    clampMs(waitMs, 200, 60000, 1000),
+		AttemptInterval: clampMs(attemptMs, 50, 10000, 300),
+		Cooldown:        time.Duration(clampInt(cooldown, 0, 3600)) * time.Second,
 	}
 	if autoCaptcha {
 		detectCtx, cancel := context.WithTimeout(ctx, ocrTimeout)
@@ -773,6 +776,13 @@ func (s *GrabService) SubmitCode(code string) (grab.State, error) {
 	return c.eng.State(), nil
 }
 
+// ClearLogs 清空抢座日志。
+func (s *GrabService) ClearLogs() (grab.State, error) {
+	c := s.core
+	c.eng.ClearLogs()
+	return c.eng.State(), nil
+}
+
 // RefreshCaptcha 换一张验证码。
 func (s *GrabService) RefreshCaptcha() (grab.State, error) {
 	c := s.core
@@ -781,6 +791,31 @@ func (s *GrabService) RefreshCaptcha() (grab.State, error) {
 }
 
 // --- 小工具 -----------------------------------------------------------------
+
+// clampInt 把整数限制在 [min, max] 区间 (冷却允许 0, 所以和 clampMs 分开)。
+func clampInt(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+// clampMs 把毫秒数限制在合理区间, 非法值 (空输入/负数) 用默认值兜底。
+func clampMs(value, min, max, fallback int) time.Duration {
+	if value <= 0 {
+		value = fallback
+	}
+	if value < min {
+		value = min
+	}
+	if value > max {
+		value = max
+	}
+	return time.Duration(value) * time.Millisecond
+}
 
 func decodeDataURL(data string) ([]byte, error) {
 	if idx := strings.Index(data, "base64,"); idx >= 0 {

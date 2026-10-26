@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import {
+  clearGrabLogs,
   clockOf,
   formatDateTime,
   refreshGrabCaptcha,
@@ -36,7 +37,8 @@ const selected = computed({
   },
 });
 
-const interval = ref(settings?.interval ?? 3);
+const waitMs = ref(settings?.waitMs ?? 1000);
+const attemptMs = ref(settings?.attemptMs ?? 300);
 const cooldown = ref(settings?.cooldown ?? 300);
 const autoCaptcha = ref(settings?.autoCaptcha ?? true);
 
@@ -46,11 +48,21 @@ const code = ref("");
 const submitting = ref(false);
 
 const logs = computed(() => state.grab?.logs ?? []);
+const dropped = computed(() => state.grab?.logsDropped ?? 0);
 const logBox = ref<HTMLElement | null>(null);
+// 自动滚动: 用户往上翻看历史时不要把他拽回底部。
+const follow = ref(true);
+
+function onLogScroll(): void {
+  const el = logBox.value;
+  if (!el) return;
+  follow.value = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+}
 
 watch(
   () => logs.value.length,
   async () => {
+    if (!follow.value) return;
     await nextTick();
     const el = logBox.value;
     if (el) el.scrollTop = el.scrollHeight;
@@ -59,8 +71,13 @@ watch(
 
 function begin(): void {
   if (!selected.value) return;
-  void saveSettings({ interval: interval.value, cooldown: cooldown.value, autoCaptcha: autoCaptcha.value });
-  startGrab(selected.value, interval.value, cooldown.value, autoCaptcha.value);
+  void saveSettings({
+    waitMs: waitMs.value,
+    attemptMs: attemptMs.value,
+    cooldown: cooldown.value,
+    autoCaptcha: autoCaptcha.value,
+  });
+  startGrab(selected.value, waitMs.value, attemptMs.value, cooldown.value, autoCaptcha.value);
 }
 
 async function submit(): Promise<void> {
@@ -136,27 +153,44 @@ const phaseText = computed(() => {
 
       <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
         <div class="flex items-center gap-2">
-          <Label for="interval" class="text-[11px] font-normal text-muted-foreground">间隔 (秒)</Label>
+          <Label for="waitMs" class="text-[11px] font-normal text-muted-foreground">等待轮询</Label>
           <Input
-            id="interval"
-            v-model.number="interval"
+            id="waitMs"
+            v-model.number="waitMs"
             type="number"
-            min="1"
-            class="h-7 w-16 text-xs tabular-nums"
+            min="200"
+            step="100"
+            class="h-7 w-20 text-xs tabular-nums"
             :disabled="grabbing"
           />
+          <span class="text-[11px] text-muted-foreground">ms</span>
         </div>
 
         <div class="flex items-center gap-2">
-          <Label for="cooldown" class="text-[11px] font-normal text-muted-foreground">冷却 (秒)</Label>
+          <Label for="attemptMs" class="text-[11px] font-normal text-muted-foreground">提交间隔</Label>
+          <Input
+            id="attemptMs"
+            v-model.number="attemptMs"
+            type="number"
+            min="50"
+            step="50"
+            class="h-7 w-20 text-xs tabular-nums"
+            :disabled="grabbing"
+          />
+          <span class="text-[11px] text-muted-foreground">ms</span>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <Label for="cooldown" class="text-[11px] font-normal text-muted-foreground">限流冷却</Label>
           <Input
             id="cooldown"
             v-model.number="cooldown"
             type="number"
-            min="10"
+            min="0"
             class="h-7 w-20 text-xs tabular-nums"
             :disabled="grabbing"
           />
+          <span class="text-[11px] text-muted-foreground">秒</span>
         </div>
 
         <Separator orientation="vertical" class="h-4!" />
@@ -169,7 +203,8 @@ const phaseText = computed(() => {
         <Separator orientation="vertical" class="h-4!" />
 
         <p class="text-[11px] text-muted-foreground tabular-nums">
-          尝试 {{ state.grab?.attempts ?? 0 }} 次 · 验证码 {{ state.grab?.captchaCount ?? 0 }} 张
+          轮询 {{ state.grab?.round ?? 0 }} 轮 · 提交 {{ state.grab?.attempts ?? 0 }} 次 · 验证码
+          {{ state.grab?.captchaCount ?? 0 }} 张
         </p>
         <p v-if="state.grab?.startedAt" class="text-[11px] text-muted-foreground tabular-nums">
           始于 {{ formatDateTime(state.grab.startedAt) }}
@@ -224,11 +259,29 @@ const phaseText = computed(() => {
         </div>
 
         <div class="rounded-lg border bg-card">
-          <div class="flex items-center justify-between border-b px-4 py-2.5">
-            <p class="text-xs font-medium">运行日志</p>
-            <p class="text-[11px] text-muted-foreground tabular-nums">{{ logs.length }} 条</p>
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5">
+            <div class="flex items-center gap-2">
+              <p class="text-xs font-medium">运行日志</p>
+              <p class="text-[11px] text-muted-foreground tabular-nums">
+                {{ logs.length }} 条
+                <span v-if="dropped"> · 已自动清屏 {{ dropped }} 条</span>
+              </p>
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <Switch v-model="follow" />
+                自动滚动
+              </label>
+              <Button variant="ghost" size="sm" :disabled="!logs.length" @click="clearGrabLogs()">
+                清屏
+              </Button>
+            </div>
           </div>
-          <div ref="logBox" class="max-h-[420px] min-h-32 overflow-auto px-4 py-3">
+          <div
+            ref="logBox"
+            class="max-h-[420px] min-h-32 overflow-auto px-4 py-3"
+            @scroll.passive="onLogScroll"
+          >
             <p v-if="!logs.length" class="py-8 text-center text-[11px] text-muted-foreground">
               还没有日志，启动抢座后这里会实时输出进度。
             </p>
@@ -242,5 +295,40 @@ const phaseText = computed(() => {
         </div>
       </div>
     </ScrollArea>
+
+    <!-- 常驻提醒: 双设备限制是最容易踩的坑, 放在底部固定可见 -->
+    <div class="shrink-0 border-t border-status-full-border bg-status-full/50 px-4 py-2.5">
+      <div class="flex items-start gap-2">
+        <svg
+          class="mt-0.5 size-3.5 shrink-0 text-status-full-fg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+          <line x1="12" y1="9" x2="12" y2="13" />
+          <line x1="12" y1="17" x2="12.01" y2="17" />
+        </svg>
+        <div class="min-w-0 flex-1 space-y-0.5">
+          <p class="text-xs font-medium text-status-full-fg">
+            抢座期间请勿在手机 App 或其他设备上打开「素质讲座」页面
+          </p>
+          <p class="text-[11px] leading-relaxed text-muted-foreground">
+            平台对同一账号有双设备限制：手机、浏览器与本程序同时访问会把当前会话顶下线，
+            可能导致抢座中断、预约失败甚至触发风控。
+            <span class="whitespace-nowrap text-muted-foreground/75" title="双设备限制提示来自网友 momo 的反馈">—@momo</span>
+          </p>
+        </div>
+        <span
+          v-if="grabbing"
+          class="shrink-0 rounded border border-status-full-border bg-status-full px-1.5 py-0.5 text-[11px] font-medium text-status-full-fg"
+        >
+          抢座进行中
+        </span>
+      </div>
+    </div>
   </div>
 </template>

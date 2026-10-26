@@ -23,7 +23,17 @@ export interface State {
     "name": string;
     "phase": string;
     "message": string;
+
+    /**
+     * 已经轮询了多少轮
+     */
+    "round": number;
     "attempts": number;
+
+    /**
+     * 因刷屏被自动清掉的日志条数
+     */
+    "logsDropped": number;
     "captchaCount": number;
 
     /**
@@ -33,7 +43,16 @@ export interface State {
     "captchaAt": string;
     "startedAt": string;
     "updatedAt": string;
-    "interval": number;
+
+    /**
+     * 等待开放时的轮询间隔 (毫秒)
+     */
+    "waitMs": number;
+
+    /**
+     * 开放后两次提交的间隔 (毫秒)
+     */
+    "attemptMs": number;
     "cooldown": number;
     "autoCaptcha": boolean;
     "success": boolean;

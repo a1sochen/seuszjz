@@ -33,10 +33,15 @@ type Config struct {
 	Remember    bool   `json:"remember"`
 	AutoLogin   bool   `json:"autoLogin"`
 	AutoCaptcha bool   `json:"autoCaptcha"`
-	Interval    int    `json:"interval"` // 抢座轮询间隔 (秒)
-	Cooldown    int    `json:"cooldown"` // 被限流后的冷却 (秒)
-	Theme       string `json:"theme"`    // dark / light
-	NetMode     string `json:"netMode"`  // auto / campus / offcampus
+	// WaitMs 是「还没开放 / 名额已满」时的轮询间隔 (毫秒): 这段应该慢, 省请求也不容易被限流。
+	WaitMs int `json:"waitMs"`
+	// AttemptMs 是「已经可以预约」时两次提交之间的间隔 (毫秒): 这段应该快。
+	AttemptMs int `json:"attemptMs"`
+	// Interval 是旧版的单间隔 (秒), 只在读老配置时用一次, 之后写回为空。
+	Interval int    `json:"interval,omitempty"`
+	Cooldown int    `json:"cooldown"` // 被限流后的冷却 (秒)
+	Theme    string `json:"theme"`    // dark / light
+	NetMode  string `json:"netMode"`  // auto / campus / offcampus
 }
 
 // Default 返回默认配置。
@@ -44,7 +49,8 @@ func Default() Config {
 	return Config{
 		AutoLogin:   true,
 		AutoCaptcha: true,
-		Interval:    3,
+		WaitMs:      1000,
+		AttemptMs:   300,
 		Cooldown:    300,
 		Theme:       "dark",
 	}
@@ -122,14 +128,36 @@ func (s *Store) Password(cfg Config) string {
 }
 
 func (c *Config) normalize() {
-	if c.Interval <= 0 {
-		c.Interval = 3
+	// 旧版只有一个「秒」间隔: 迁移成「等开放」的默认值, 开放后的节奏单独给。
+	if c.WaitMs <= 0 {
+		if c.Interval > 0 {
+			c.WaitMs = c.Interval * 1000
+		} else {
+			c.WaitMs = 1000
+		}
 	}
-	if c.Interval > 60 {
-		c.Interval = 60
+	if c.WaitMs < 200 {
+		c.WaitMs = 200
 	}
-	if c.Cooldown <= 0 {
-		c.Cooldown = 300
+	if c.WaitMs > 60000 {
+		c.WaitMs = 60000
+	}
+	if c.AttemptMs <= 0 {
+		c.AttemptMs = 300
+	}
+	if c.AttemptMs < 50 {
+		c.AttemptMs = 50
+	}
+	if c.AttemptMs > 10000 {
+		c.AttemptMs = 10000
+	}
+	c.Interval = 0
+	// 冷却允许填 0: 表示被限流后不做等待, 立即重试 (用户自担风险)。
+	if c.Cooldown < 0 {
+		c.Cooldown = 0
+	}
+	if c.Cooldown > 3600 {
+		c.Cooldown = 3600
 	}
 	if c.Theme != "light" {
 		c.Theme = "dark"

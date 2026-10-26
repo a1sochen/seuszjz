@@ -18,7 +18,8 @@ func TestSnapshotRoundTrip(t *testing.T) {
 		Remember:    true,
 		AutoLogin:   true,
 		AutoCaptcha: true,
-		Interval:    5,
+		WaitMs:      5000,
+		AttemptMs:   200,
 		Cooldown:    120,
 		Theme:       "light",
 	}); err != nil {
@@ -47,7 +48,7 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	}
 
 	cfg := dst.Load()
-	if cfg.Username != "220000001" || cfg.Interval != 5 || cfg.Cooldown != 120 || cfg.Theme != "light" {
+	if cfg.Username != "220000001" || cfg.WaitMs != 5000 || cfg.AttemptMs != 200 || cfg.Cooldown != 120 || cfg.Theme != "light" {
 		t.Fatalf("配置恢复不正确: %+v", cfg)
 	}
 	if got := dst.Password(cfg); got != "s3cret" {
@@ -90,7 +91,7 @@ func TestRestoreEmptyKeepsDefaults(t *testing.T) {
 	if err := s.Restore(nil); err != nil {
 		t.Fatalf("空快照不应报错: %v", err)
 	}
-	if !s.Load().AutoLogin || s.Load().Interval != 3 {
+	if !s.Load().AutoLogin || s.Load().WaitMs != 1000 {
 		t.Fatalf("默认配置不正确: %+v", s.Load())
 	}
 	if _, ok := s.LoadSession(); !ok {
@@ -108,7 +109,7 @@ func TestRestorePartialSnapshotUsesDefaults(t *testing.T) {
 		t.Fatalf("字段没恢复: %+v", cfg)
 	}
 	// 快照里没写的字段应该落到默认值, 而不是零值。
-	if !cfg.AutoLogin || !cfg.AutoCaptcha || cfg.Interval != 3 || cfg.Cooldown != 300 || cfg.Theme != "dark" {
+	if !cfg.AutoLogin || !cfg.AutoCaptcha || cfg.WaitMs != 1000 || cfg.Cooldown != 300 || cfg.Theme != "dark" {
 		t.Fatalf("缺失字段没有取默认值: %+v", cfg)
 	}
 }
@@ -192,7 +193,7 @@ func TestImportLegacyFiles(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("导入旧文件失败: ok=%v err=%v", ok, err)
 	}
-	if got := s.Load(); got.Username != "220000001" || got.Interval != 7 {
+	if got := s.Load(); got.Username != "220000001" || got.WaitMs != 7000 {
 		t.Fatalf("配置没导进来: %+v", got)
 	}
 	if got, ok := s.LoadSession(); !ok || len(got.Cookies) != 1 {
