@@ -11,11 +11,11 @@ inputs:
     required: false
     default: 'false'
   install-gtk:
-    description: Linux 上安装 GTK4 + WebKitGTK 6.0 开发包（只有 Linux 桌面版构建需要）
+    description: Linux 上安装 GTK4 + WebKitGTK 6.0 开发包（编译 Linux 桌面版需要）
     required: false
     default: 'false'
   install-gtk-runtime:
-    description: Linux 上只装 GTK4 + WebKitGTK 6.0 运行库（跑 wails3 命令行就需要，体积小得多）
+    description: Linux 上只装 GTK4 + WebKitGTK 6.0 运行库（跑现成的 wails3 二进制就够，体积小得多）
     required: false
     default: 'false'
   install-android:
@@ -39,25 +39,39 @@ runs:
         cache: npm
         cache-dependency-path: frontend/package-lock.json
 
-    # 缓存的 wails3 二进制在 Linux 上动态链接了 WebKitGTK（首次可能是在装了开发包的
-    # runner 上编译进缓存），所以只要调用 wails3，运行库就必须在：
-    #   install-gtk          -> 开发包（编译 Linux 桌面版需要，含运行库）
-    #   install-gtk-runtime  -> 只装运行库（Android/iOS 之类只用 wails3 命令行的任务）
-    # 注意: composite action 的步骤不支持 timeout-minutes，这里用 `timeout` 兜住卡死的下载。
-    # GH 的 Ubuntu 镜像偶尔会卡在 webkit 的大包上，所以单次给 20 分钟 + 失败重试一次。
+    # 先恢复 wails3 缓存：决定后面到底只需要运行库，还是要现场编译（→ 需要开发包）。
+    - name: 缓存 wails3
+      if: inputs.install-wails == 'true'
+      id: cache-wails
+      uses: actions/cache@v4
+      with:
+        path: .gobin
+        key: wails3-${{ inputs.wails-version }}-${{ runner.os }}-${{ runner.arch }}
+
+    # Linux 上 wails3 二进制动态链接 WebKitGTK，所以调用 wails3 就一定需要运行库；
+    # 缓存没命中要现场 go install（cgo + pkg-config）时，还需要 gtk4/webkitgtk-6.0 的开发包。
+    # 注意: composite action 的步骤不支持 timeout-minutes，这里用 `timeout` 兜住卡死的下载
+    # （macOS 没有 GNU timeout，所以只有 Linux 步骤里能用）。
     - name: 安装 Linux 图形库（GTK4 + WebKitGTK 6.0）
-      if: (inputs.install-gtk == 'true' || inputs.install-gtk-runtime == 'true') && runner.os == 'Linux'
+      if: runner.os == 'Linux' && (inputs.install-gtk == 'true' || inputs.install-gtk-runtime == 'true' || (inputs.install-wails == 'true' && steps.cache-wails.outputs.cache-hit != 'true'))
       shell: bash
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
         APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=60 -o Acquire::https::Timeout=60 -o Dpkg::Use-Pty=0"
+        NEED_DEV="false"
         if [ "${{ inputs.install-gtk }}" = "true" ]; then
+          NEED_DEV="true"
+        fi
+        if [ "${{ inputs.install-wails }}" = "true" ] && [ "${{ steps.cache-wails.outputs.cache-hit }}" != "true" ]; then
+          NEED_DEV="true"
+        fi
+        if [ "$NEED_DEV" = "true" ]; then
           PKGS="pkg-config gcc libc6-dev libgtk-4-dev libwebkitgtk-6.0-dev"
-          MODE="开发包"
+          MODE="开发包（需要编译 wails3 或构建 Linux 桌面版）"
         else
           PKGS="libgtk-4-1 libwebkitgtk-6.0-4"
-          MODE="运行库"
+          MODE="运行库（只为运行现成的 wails3）"
         fi
         echo "安装 GTK/WebKit $MODE: $PKGS"
         sudo timeout 300 apt-get update $APT_OPTS
@@ -67,7 +81,7 @@ runs:
             break
           fi
           if [ "$attempt" = "2" ]; then
-            echo "GTK/WebKit $MODE 安装两次都失败"
+            echo "GTK/WebKit 安装两次都失败"
             exit 1
           fi
           echo "安装失败，清理 dpkg 状态并重新拉索引后重试"
@@ -75,7 +89,7 @@ runs:
           sudo timeout 300 apt-get update $APT_OPTS || true
           sleep 10
         done
-        if [ "${{ inputs.install-gtk }}" = "true" ]; then
+        if [ "$NEED_DEV" = "true" ]; then
           pkg-config --exists gtk4 && pkg-config --exists webkitgtk-6.0
           echo "gtk4 $(pkg-config --modversion gtk4) / webkitgtk-6.0 $(pkg-config --modversion webkitgtk-6.0)"
         fi
@@ -118,20 +132,14 @@ runs:
         echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
         java -version
 
-    - name: 缓存 wails3
-      if: inputs.install-wails == 'true'
-      id: cache-wails
-      uses: actions/cache@v4
-      with:
-        path: .gobin
-        key: wails3-${{ inputs.wails-version }}-${{ runner.os }}-${{ runner.arch }}
-
+    # macOS 上没有 GNU timeout（只有 gtimeout），所以这里不再包 `timeout`：
+    # 单步耗时由各 job 的 timeout-minutes 兜住（Mac 任务 50 分钟）。
     - name: 安装 wails3
       if: inputs.install-wails == 'true' && steps.cache-wails.outputs.cache-hit != 'true'
       shell: bash
       env:
         GOBIN: ${{ github.workspace }}/.gobin
-      run: timeout 1500 go install github.com/wailsapp/wails/v3/cmd/wails3@${{ inputs.wails-version }}
+      run: go install github.com/wailsapp/wails/v3/cmd/wails3@${{ inputs.wails-version }}
 
     - name: 把 wails3 加进 PATH
       if: inputs.install-wails == 'true'
